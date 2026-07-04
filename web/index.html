@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Agent Bridge</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release/build/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release/build/highlight.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -66,6 +70,44 @@
     .msg.user { align-self: flex-end; background: #0f3460; }
     .msg.agent { align-self: flex-start; background: #2c2c54; }
     .msg.system { align-self: center; background: transparent; color: #7f8c8d; font-size: 12px; }
+
+    /* agent 头像 */
+    .msg.agent::before {
+      content: "🤖"; font-size: 14px; margin-right: 6px;
+    }
+
+    /* markdown 内容样式 */
+    .msg.agent h1, .msg.agent h2, .msg.agent h3 { margin: 8px 0 4px; }
+    .msg.agent h1 { font-size: 16px; }
+    .msg.agent h2 { font-size: 15px; }
+    .msg.agent h3 { font-size: 14px; }
+    .msg.agent p { margin: 4px 0; }
+    .msg.agent ul, .msg.agent ol { margin: 4px 0; padding-left: 20px; }
+    .msg.agent li { margin: 2px 0; }
+    .msg.agent a { color: #5dade2; text-decoration: underline; }
+    .msg.agent blockquote {
+      border-left: 3px solid #5dade2; padding-left: 10px;
+      margin: 6px 0; color: #aab; font-style: italic;
+    }
+    .msg.agent pre {
+      background: #0d1117; border-radius: 8px; padding: 10px;
+      margin: 6px 0; overflow-x: auto;
+    }
+    .msg.agent code {
+      font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+    }
+    .msg.agent :not(pre) > code {
+      background: #1a1a2e; padding: 2px 5px; border-radius: 4px;
+    }
+    .msg.agent table {
+      border-collapse: collapse; margin: 6px 0; font-size: 12px;
+    }
+    .msg.agent th, .msg.agent td {
+      border: 1px solid #3a3a5e; padding: 4px 8px;
+    }
+    .msg.agent th { background: #1a1a4e; }
+    .msg.agent hr { border: none; border-top: 1px solid #3a3a5e; margin: 8px 0; }
     #input-bar {
       padding: 10px 12px; background: #16213e; border-top: 1px solid #0f3460;
       display: flex; gap: 8px;
@@ -359,7 +401,8 @@
           showApproval(evt.action, evt.description);
         } else if (evt.type === "done") {
           if (currentMsgEl) {
-            currentMsgEl.textContent = evt.text;
+            currentMsgEl.innerHTML = renderMarkdown(evt.text);
+            highlightCode(currentMsgEl);
             currentMsgEl.classList.remove("cursor");
           } else {
             addMsg(evt.text, "agent");
@@ -443,7 +486,7 @@
 
     function renderHistory(messages) {
       for (const msg of messages) {
-        addMsg(msg.text, msg.role);
+        addMsg(msg.text, msg.role === "assistant" ? "agent" : msg.role);
       }
     }
 
@@ -469,6 +512,13 @@
       const div = document.createElement("div");
       div.textContent = text;
       return div.innerHTML;
+    }
+
+    // ─── Markdown 渲染 ───
+    function renderMarkdown(text) {
+      if (typeof marked === "undefined") return escapeHtml(text);
+      const raw = marked.parse(text, { breaks: true });
+      return DOMPurify.sanitize(raw);
     }
 
     // ─── 工具函数 ───
@@ -507,10 +557,22 @@
     function addMsg(text, role) {
       const el = document.createElement("div");
       el.className = `msg ${role}`;
-      el.textContent = text;
+      if (role === "agent") {
+        el.innerHTML = text ? renderMarkdown(text) : "";
+        highlightCode(el);
+      } else {
+        el.textContent = text;
+      }
       $messages.appendChild(el);
       scrollToBottom();
       return el;
+    }
+
+    function highlightCode(el) {
+      if (typeof hljs === "undefined") return;
+      el.querySelectorAll("pre code").forEach((block) => {
+        try { hljs.highlightElement(block); } catch {}
+      });
     }
 
     function addSystem(text) {
