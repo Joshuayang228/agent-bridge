@@ -142,6 +142,19 @@
 - **commit**：`834c98b` test: add unit tests for core modules
 - **下一步**：OpenAI 兼容 SSE / Demo 脚本打磨 / 接 my-agent。
 
+### [2026-07-04] OpenAI 兼容 API 完成
+
+- **GET /v1/models** — 返回所有 agent 作为 model（model 名 = agent id）
+- **POST /v1/chat/completions** — 支持 `stream: true`（SSE 流式）和非流式
+- **认证**：Bearer token（GATEWAY_TOKEN 或 device token）
+- **CORS** 已启用，浏览器端 OpenAI SDK 可直接调用
+- **curl 验证**：
+  - `GET /v1/models` → 返回 3 个 agent ✓
+  - 非流式 → `chat.completion` JSON ✓
+  - 流式 → SSE `data: {chunk}\n\n` + `data: [DONE]` ✓
+- **commit**：`65e820f` feat: OpenAI-compatible API
+- **下一步**：Demo 脚本打磨 / 接 my-agent / 写 README。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
