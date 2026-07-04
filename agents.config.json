@@ -17,7 +17,9 @@
       "id": "claude-code",
       "name": "Claude Code",
       "type": "claude-code",
-      "capabilities": ["chat", "shell", "files", "tools"]
+      "capabilities": ["chat", "shell", "files", "tools"],
+      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
+      "dangerousTools": ["Bash", "Write", "Edit"]
     }
   ]
 }

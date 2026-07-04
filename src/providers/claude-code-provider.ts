@@ -35,6 +35,8 @@ interface CCLine {
 
 export class ClaudeCodeProvider implements AgentProvider {
   readonly info: AgentInfo;
+  private allowedTools: string[];
+  private dangerousTools: Set<string>;
 
   constructor(config: AgentConfig) {
     this.info = {
@@ -43,10 +45,17 @@ export class ClaudeCodeProvider implements AgentProvider {
       type: config.type,
       capabilities: config.capabilities,
     };
+    this.allowedTools = config.allowedTools ?? [];
+    this.dangerousTools = new Set(config.dangerousTools ?? []);
   }
 
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
     const args = ["-p", input.message, "--output-format", "stream-json", "--verbose"];
+
+    // 能力白名单：传给 CLI 的 --allowedTools 参数
+    if (this.allowedTools.length > 0) {
+      args.push("--allowedTools", ...this.allowedTools);
+    }
 
     const child = spawn("claude", args, {
       shell: true,
@@ -61,7 +70,7 @@ export class ClaudeCodeProvider implements AgentProvider {
       for await (const chunk of child.stdout) {
         buffer += chunk.toString();
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // 最后一段可能不完整，留着
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -71,14 +80,31 @@ export class ClaudeCodeProvider implements AgentProvider {
           try {
             parsed = JSON.parse(trimmed) as CCLine;
           } catch {
-            continue; // 跳过非 JSON 行
+            continue;
           }
 
           const events = parseCCLine(parsed);
+
+          // 危险工具审批拦截
           for (const evt of events) {
-            if (evt.type === "delta") fullText += evt.text;
-            if (evt.type === "done" && evt.text) fullText = evt.text;
-            yield evt;
+            if (evt.type === "tool_start" && this.isDangerous(evt.tool)) {
+              yield evt; // 先推送 tool_start 事件让手机端看到
+
+              // 触发手机审批
+              const approved = input.requestApproval
+                ? await input.requestApproval(evt.tool, `危险工具调用：${evt.tool}`)
+                : true;
+
+              if (!approved) {
+                child.kill();
+                yield { type: "error", message: `用户拒绝了工具调用：${evt.tool}` };
+                return;
+              }
+            } else {
+              if (evt.type === "delta") fullText += evt.text;
+              if (evt.type === "done" && evt.text) fullText = evt.text;
+              yield evt;
+            }
           }
         }
       }
@@ -106,6 +132,12 @@ export class ClaudeCodeProvider implements AgentProvider {
     } finally {
       child.kill();
     }
+  }
+
+  /** 检查工具是否危险（tool 字段格式 "Bash: rm -rf xxx"） */
+  private isDangerous(tool: string): boolean {
+    const toolName = tool.split(":")[0].trim();
+    return this.dangerousTools.has(toolName);
   }
 }
 

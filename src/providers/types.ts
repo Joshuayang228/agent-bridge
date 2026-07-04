@@ -45,5 +45,9 @@ export interface AgentConfig {
   name: string;
   type: string;
   capabilities: string[];
+  /** 允许执行的工具白名单（不在列表的工具被拒绝） */
+  allowedTools?: string[];
+  /** 需要手机审批的危险工具（必须是 allowedTools 的子集） */
+  dangerousTools?: string[];
   config?: Record<string, unknown>;
 }
