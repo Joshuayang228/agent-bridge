@@ -95,6 +95,15 @@
 - **commit**：`9fbd78e` feat: QR code pairing
 - **下一步**：多会话管理 / agent 主动推送 / OpenAI 兼容 SSE / push 到 GitHub。
 
+### [2026-07-04] 多会话管理完成
+
+- **SessionManager 完成**：内存存储，每会话绑定 agent，存消息历史。方法：create/get/list/history/addUserMessage/addAssistantMessage/delete。
+- **协议扩展**：`sessions.list` / `sessions.create` / `sessions.delete` / `chat.history` 四个新方法。chat.send 时自动存用户消息 + assistant 回复到历史。
+- **Web App 侧边栏**：抽屉式会话列表（≡ 按钮开关），新建会话、切换会话、加载历史。首次发消息自动创建会话，用首条消息作标题。
+- **tsc --noEmit 通过**，配对+会话+历史端到端验证通过。
+- **commit**：`f02fbac` feat: multi-session management
+- **下一步**：agent 主动推送 / OpenAI 兼容 SSE / UI 打磨 / push 到 GitHub（待用户创建 agent-bridge 仓库）。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
