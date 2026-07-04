@@ -7,6 +7,7 @@
 
 import type { WebSocket } from "ws";
 import type { ProviderRegistry } from "../providers/registry.js";
+import type { SessionManager } from "./session-manager.js";
 import type {
   ConnectParams,
   EventFrame,
@@ -29,7 +30,11 @@ interface SessionState {
   pendingApproval: ((approved: boolean) => void) | null;
 }
 
-export function createWsHandler(registry: ProviderRegistry, auth: AuthManager) {
+export function createWsHandler(
+  registry: ProviderRegistry,
+  auth: AuthManager,
+  sessions: SessionManager,
+) {
   return function handleConnection(ws: WebSocket) {
     const state: SessionState = {
       authenticated: false,
@@ -58,7 +63,7 @@ export function createWsHandler(registry: ProviderRegistry, auth: AuthManager) {
       }
 
       if (frame.type === "req") {
-        await handleReq(ws, frame, state, registry);
+        await handleReq(ws, frame, state, registry, sessions);
       }
     });
   };
@@ -118,14 +123,39 @@ async function handleReq(
   frame: ReqFrame,
   state: SessionState,
   registry: ProviderRegistry,
+  sessions: SessionManager,
 ) {
   switch (frame.method) {
     case "agents.list":
       send(ws, makeResOk(frame.id, { agents: registry.list() }));
       break;
 
+    case "sessions.list":
+      send(ws, makeResOk(frame.id, { sessions: sessions.list() }));
+      break;
+
+    case "sessions.create": {
+      const params = (frame.params ?? {}) as { agentId: string; title?: string };
+      const session = sessions.create(params.agentId, params.title);
+      send(ws, makeResOk(frame.id, { session }));
+      break;
+    }
+
+    case "sessions.delete": {
+      const params = (frame.params ?? {}) as { sessionId: string };
+      const ok = sessions.delete(params.sessionId);
+      send(ws, makeResOk(frame.id, { status: ok ? "deleted" : "not-found" }));
+      break;
+    }
+
+    case "chat.history": {
+      const params = (frame.params ?? {}) as { sessionId: string };
+      send(ws, makeResOk(frame.id, { messages: sessions.history(params.sessionId) }));
+      break;
+    }
+
     case "chat.send": {
-      await handleChatSend(ws, frame, state, registry);
+      await handleChatSend(ws, frame, state, registry, sessions);
       break;
     }
 
@@ -172,6 +202,7 @@ async function handleChatSend(
   frame: ReqFrame,
   state: SessionState,
   registry: ProviderRegistry,
+  sessions: SessionManager,
 ) {
   const params = (frame.params ?? {}) as {
     agentId: string;
@@ -185,12 +216,17 @@ async function handleChatSend(
     return;
   }
 
+  // 存用户消息
+  sessions.addUserMessage(params.sessionId, params.message);
+
   // 阶段 1：立即 ack
   send(ws, makeResOk(frame.id, { status: "accepted" }));
 
   // 阶段 2：流式运行 agent
   const controller = new AbortController();
   state.runningController = controller;
+
+  let fullResponse = "";
 
   try {
     const events = provider.send({
@@ -207,7 +243,14 @@ async function handleChatSend(
 
     for await (const evt of events) {
       if (controller.signal.aborted) break;
+      if (evt.type === "delta") fullResponse += evt.text;
+      if (evt.type === "done" && evt.text) fullResponse = evt.text;
       send(ws, makeEvent(state, "agent", evt));
+    }
+
+    // 存 assistant 回复
+    if (fullResponse) {
+      sessions.addAssistantMessage(params.sessionId, fullResponse);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

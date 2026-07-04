@@ -5,6 +5,7 @@
 
 import { ProviderRegistry } from "./providers/registry.js";
 import { AuthManager } from "./gateway/auth.js";
+import { SessionManager } from "./gateway/session-manager.js";
 import { startServer } from "./gateway/server.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -24,11 +25,12 @@ async function main() {
     console.warn("[main] 未找到 agents.config.json，无 agent 加载");
   }
 
-  // 初始化认证
+  // 初始化认证 + 会话管理
   const auth = new AuthManager();
+  const sessions = new SessionManager();
 
   const port = Number(process.env.PORT) || 18789;
-  startServer(registry, auth, port);
+  startServer(registry, auth, sessions, port);
 }
 
 main().catch((err) => {

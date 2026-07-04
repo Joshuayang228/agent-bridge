@@ -13,6 +13,7 @@ import { WebSocketServer } from "ws";
 import qrcode from "qrcode-terminal";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { AuthManager } from "./auth.js";
+import type { SessionManager } from "./session-manager.js";
 import { createWsHandler } from "./ws-handler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +39,7 @@ function getLocalIPs(): string[] {
 export function startServer(
   registry: ProviderRegistry,
   auth: AuthManager,
+  sessions: SessionManager,
   port = DEFAULT_PORT,
 ) {
   const httpServer = createServer(async (req, res) => {
@@ -78,7 +80,7 @@ export function startServer(
   });
 
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
-  wss.on("connection", createWsHandler(registry, auth));
+  wss.on("connection", createWsHandler(registry, auth, sessions));
 
   // 绑定 0.0.0.0 让局域网/远程可访问
   httpServer.listen(port, "0.0.0.0", () => {

@@ -9,8 +9,40 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #1a1a2e; color: #eee; height: 100vh;
-      display: flex; flex-direction: column;
+      display: flex; flex-direction: column; overflow: hidden;
     }
+
+    /* 侧边栏 */
+    #sidebar {
+      position: fixed; top: 0; left: 0; width: 260px; height: 100%;
+      background: #0d0d1a; z-index: 50; transform: translateX(-100%);
+      transition: transform 0.25s ease; display: flex; flex-direction: column;
+    }
+    #sidebar.open { transform: translateX(0); }
+    #sidebar-header {
+      padding: 14px 16px; border-bottom: 1px solid #1a1a4e;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #sidebar-header h2 { font-size: 14px; }
+    #new-session-btn {
+      padding: 6px 12px; background: #e94560; color: #fff;
+      border: none; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+    #session-list {
+      flex: 1; overflow-y: auto; padding: 8px;
+    }
+    .session-item {
+      padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      margin-bottom: 4px; font-size: 13px;
+    }
+    .session-item:hover { background: #1a1a4e; }
+    .session-item.active { background: #0f3460; }
+    .session-item .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-item .meta { font-size: 11px; color: #7f8c8d; margin-top: 2px; }
+    #overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40;
+    }
+    #overlay.active { display: block; }
     header {
       padding: 12px 16px; background: #16213e; border-bottom: 1px solid #0f3460;
       display: flex; align-items: center; gap: 12px;
@@ -119,7 +151,20 @@
     </div>
   </div>
 
+  <!-- 侧边栏遮罩 -->
+  <div id="overlay"></div>
+
+  <!-- 会话侧边栏 -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h2>会话列表</h2>
+      <button id="new-session-btn">+ 新建</button>
+    </div>
+    <div id="session-list"></div>
+  </div>
+
   <header>
+    <button id="menu-btn" style="font-size:20px;background:none;border:none;color:#eee;cursor:pointer;">≡</button>
     <h1>Agent Bridge</h1>
     <select id="agent-select"><option value="">加载中...</option></select>
     <span id="status" class="disconnected">未连接</span>
@@ -156,6 +201,7 @@
     let currentMsgEl = null;
     let ws = null;
     let pendingPair = false; // 是否在等待配对响应
+    let currentSessionId = null; // 当前会话 ID
 
     // device token 持久化
     const STORAGE_KEY = "agent-bridge-device-token";
@@ -255,6 +301,27 @@
             $agentSelect.appendChild(opt);
           }
           addSystem(`已连接，${payload.agents.length} 个 agent 可用`);
+          loadSessions();
+        }
+
+        // sessions.list 响应
+        if (payload?.sessions !== undefined) {
+          renderSessionList(payload.sessions);
+        }
+
+        // sessions.create 响应
+        if (payload?.session) {
+          currentSessionId = payload.session.id;
+          $agentSelect.value = payload.session.agentId;
+          $messages.innerHTML = "";
+          addSystem(`新会话：${payload.session.title}`);
+          loadSessions();
+          closeSidebar();
+        }
+
+        // chat.history 响应
+        if (payload?.messages !== undefined) {
+          renderHistory(payload.messages);
         }
 
         // chat.send 的 ack
@@ -322,10 +389,86 @@
       const agentId = $agentSelect.value;
       if (!agentId) return;
 
+      // 如果没有会话，自动创建一个
+      if (!currentSessionId) {
+        sendReq("sessions.create", { agentId, title: text.slice(0, 20) });
+        // 等会话创建后再发消息——用一个临时队列
+        const wait = setInterval(() => {
+          if (currentSessionId) {
+            clearInterval(wait);
+            doSend(agentId, text);
+          }
+        }, 100);
+        return;
+      }
+
+      doSend(agentId, text);
+    }
+
+    function doSend(agentId, text) {
       addMsg(text, "user");
       $input.value = "";
+      sendReq("chat.send", { agentId, message: text, sessionId: currentSessionId });
+    }
 
-      sendReq("chat.send", { agentId, message: text, sessionId: "default" });
+    // ─── 会话管理 ───
+    function loadSessions() {
+      sendReq("sessions.list", {});
+    }
+
+    function renderSessionList(sessions) {
+      const $list = document.getElementById("session-list");
+      $list.innerHTML = "";
+      if (sessions.length === 0) {
+        $list.innerHTML = '<div style="color:#7f8c8d;font-size:12px;padding:12px;">暂无会话，点「新建」创建</div>';
+        return;
+      }
+      for (const s of sessions) {
+        const el = document.createElement("div");
+        el.className = "session-item" + (s.id === currentSessionId ? " active" : "");
+        el.innerHTML = `<div class="title">${escapeHtml(s.title)}</div><div class="meta">${s.messageCount} 条消息</div>`;
+        el.addEventListener("click", () => switchSession(s));
+        $list.appendChild(el);
+      }
+    }
+
+    function switchSession(session) {
+      currentSessionId = session.id;
+      $agentSelect.value = session.agentId;
+      $messages.innerHTML = "";
+      sendReq("chat.history", { sessionId: session.id });
+      loadSessions();
+      closeSidebar();
+    }
+
+    function renderHistory(messages) {
+      for (const msg of messages) {
+        addMsg(msg.text, msg.role);
+      }
+    }
+
+    // ─── 侧边栏 ───
+    function openSidebar() {
+      document.getElementById("sidebar").classList.add("open");
+      document.getElementById("overlay").classList.add("active");
+    }
+    function closeSidebar() {
+      document.getElementById("sidebar").classList.remove("open");
+      document.getElementById("overlay").classList.remove("active");
+    }
+
+    document.getElementById("menu-btn").addEventListener("click", openSidebar);
+    document.getElementById("overlay").addEventListener("click", closeSidebar);
+    document.getElementById("new-session-btn").addEventListener("click", () => {
+      const agentId = $agentSelect.value;
+      if (!agentId) return;
+      sendReq("sessions.create", { agentId });
+    });
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
     }
 
     // ─── 工具函数 ───
