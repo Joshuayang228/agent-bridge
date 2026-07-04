@@ -344,6 +344,10 @@
           }
           addSystem(`已连接，${payload.agents.length} 个 agent 可用`);
           loadSessions();
+          // 请求浏览器通知权限（agent 主动推送时用）
+          if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission();
+          }
         }
 
         // sessions.list 响应
@@ -416,6 +420,19 @@
             addMsg(`[错误] ${evt.message}`, "agent");
           }
           currentMsgEl = null;
+        }
+      }
+
+      // agent 主动推送通知
+      if (frame.type === "event" && frame.event === "notification") {
+        const n = frame.payload;
+        if (n.type === "agent_message") {
+          // 直接在聊天区显示 agent 主动消息
+          addMsg(n.text, "agent");
+          // 浏览器通知（如果页面在后台）
+          if (document.hidden && Notification.permission === "granted") {
+            new Notification(`${n.agentName}: ${n.text}`, { tag: n.agentId });
+          }
         }
       }
     };

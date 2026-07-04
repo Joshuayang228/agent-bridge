@@ -4,7 +4,11 @@
       "id": "mock",
       "name": "测试机器人",
       "type": "mock",
-      "capabilities": ["chat"]
+      "capabilities": ["chat"],
+      "schedule": {
+        "intervalMs": 60000,
+        "prompt": "主动打个招呼，说一句简短的话"
+      }
     },
     {
       "id": "mock-echo",

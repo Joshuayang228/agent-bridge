@@ -8,6 +8,7 @@
 import type { WebSocket } from "ws";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { SessionManager } from "./session-manager.js";
+import type { ConnectionManager } from "./connection-manager.js";
 import type {
   ConnectParams,
   EventFrame,
@@ -34,6 +35,7 @@ export function createWsHandler(
   registry: ProviderRegistry,
   auth: AuthManager,
   sessions: SessionManager,
+  connections: ConnectionManager,
 ) {
   return function handleConnection(ws: WebSocket) {
     const state: SessionState = {
@@ -58,7 +60,7 @@ export function createWsHandler(
           send(ws, makeError("not-connected", "请先发送 connect 请求"));
           return;
         }
-        handleConnect(ws, frame, state, registry, auth);
+        handleConnect(ws, frame, state, registry, auth, connections);
         return;
       }
 
@@ -76,6 +78,7 @@ function handleConnect(
   state: SessionState,
   registry: ProviderRegistry,
   auth: AuthManager,
+  connections: ConnectionManager,
 ) {
   const params = (frame.params ?? {}) as unknown as ConnectParams;
 
@@ -95,6 +98,7 @@ function handleConnect(
       deviceToken,
     };
     send(ws, makeResOk(frame.id, payload));
+    connections.add(ws);
     console.log("[ws] 设备配对成功，已颁发 device token");
     return;
   }
@@ -108,6 +112,7 @@ function handleConnect(
       agents: registry.list(),
     };
     send(ws, makeResOk(frame.id, payload));
+    connections.add(ws);
     console.log("[ws] 客户端已认证");
     return;
   }
