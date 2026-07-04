@@ -126,6 +126,22 @@
 - **commit**：`222901d` feat: markdown rendering + code highlighting
 - **下一步**：agent 主动推送 / OpenAI 兼容 SSE / Demo 脚本打磨。
 
+### [2026-07-04] 单元测试补齐 + 自审修复
+
+- **闸3 违规补救**：此前每次 commit 只做 tsc --noEmit，跳过了闸3 第1步（自审）和第2步（运行测试）。本次补齐。
+- **自审发现并修复**：
+  - cron-scheduler.ts 空 catch 块 → 加 console.error
+  - web/index.html highlightCode 空 catch → 加注释
+  - registry.ts loadConfig 不处理文件不存在 → 加 existsSync 守卫
+- **单元测试**：32 tests / 4 files，全部通过
+  - auth.test.ts (8 tests)：配对码生成、pair 正确/错误、verify 有效/无效/null、环境变量 token
+  - session-manager.test.ts (11 tests)：create、get、list 排序、history、addUserMessage 标题更新、delete
+  - mock-provider.test.ts (5 tests)：info、delta 流式、done 事件、echo 回声、审批回调触发
+  - registry.test.ts (7 tests)：空列表、loadConfig 单/多 agent、allowedTools、文件不存在、未知 type 跳过
+- **vitest.config.ts**：排除 _reference/ 目录的测试文件
+- **commit**：`834c98b` test: add unit tests for core modules
+- **下一步**：OpenAI 兼容 SSE / Demo 脚本打磨 / 接 my-agent。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
