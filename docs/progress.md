@@ -104,6 +104,17 @@
 - **commit**：`f02fbac` feat: multi-session management
 - **下一步**：agent 主动推送 / OpenAI 兼容 SSE / UI 打磨 / push 到 GitHub（待用户创建 agent-bridge 仓库）。
 
+### [2026-07-04] 能力白名单完成
+
+- **安全红线满足**：实现了 AGENTS.md 要求的「能力白名单——agent 可执行的动作走白名单而非黑名单，默认拒绝未知动作」。
+- **两层安全机制**：
+  - `allowedTools`：传给 Claude Code CLI 的 `--allowedTools` 参数，CLI 层面拦截不在列表的工具
+  - `dangerousTools`：allowedTools 的子集，Provider 收到这些工具的 tool_use 事件时触发手机审批弹窗
+- **拦截流程**：tool_use 事件 → 检查是否在 dangerousTools → 推送 approval_required 事件到手机 → 批准则继续 / 拒绝则 kill 子进程 + error
+- **配置示例**：Claude Code agent 声明 `allowedTools: [Read,Write,Edit,Grep,Glob,Bash]`，`dangerousTools: [Bash,Write,Edit]`（读/Grep/Glob 直接放行，写/执行需手机审批）
+- **commit**：`fdbefc7` feat: capability whitelist
+- **下一步**：agent 主动推送 / OpenAI 兼容 SSE / UI 打磨 / push 到 GitHub。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
