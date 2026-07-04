@@ -68,8 +68,8 @@ export class CronScheduler {
           text: fullText,
         });
       }
-    } catch {
-      // 静默失败，不打断服务
+    } catch (err) {
+      console.error(`[cron] agent "${s.agentId}" 触发失败:`, err instanceof Error ? err.message : err);
     }
   }
 

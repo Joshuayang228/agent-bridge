@@ -6,6 +6,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import type { AgentConfig, AgentProvider } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
 import { MockProvider } from "./mock-provider.js";
@@ -27,6 +28,10 @@ export class ProviderRegistry {
 
   /** 从配置文件加载并实例化所有 provider */
   async loadConfig(configPath: string): Promise<void> {
+    if (!existsSync(configPath)) {
+      console.warn(`[registry] 配置文件不存在: ${configPath}`);
+      return;
+    }
     const raw = await readFile(configPath, "utf-8");
     const { agents } = JSON.parse(raw) as { agents: AgentConfig[] };
 

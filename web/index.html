@@ -588,7 +588,7 @@
     function highlightCode(el) {
       if (typeof hljs === "undefined") return;
       el.querySelectorAll("pre code").forEach((block) => {
-        try { hljs.highlightElement(block); } catch {}
+        try { hljs.highlightElement(block); } catch (e) { /* highlight 失败不影响内容显示 */ }
       });
     }
 
