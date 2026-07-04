@@ -186,10 +186,19 @@
 
     // 页面加载启动
     function init() {
+      // 检查 URL 参数 ?code=xxx（扫码配对）
+      const urlParams = new URLSearchParams(location.search);
+      const pairCode = urlParams.get("code");
+
       const token = getDeviceToken();
       if (token) {
+        // 已配对设备，直接用 token 连接
         connectWithToken(token);
+      } else if (pairCode) {
+        // 扫码带入了配对码，自动配对
+        connectWithPairingCode(pairCode);
       } else {
+        // 首次访问，弹配对码输入框
         showPairing();
       }
     }

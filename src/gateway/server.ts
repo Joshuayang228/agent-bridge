@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer } from "ws";
+import qrcode from "qrcode-terminal";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { AuthManager } from "./auth.js";
 import { createWsHandler } from "./ws-handler.js";
@@ -82,6 +83,9 @@ export function startServer(
   // 绑定 0.0.0.0 让局域网/远程可访问
   httpServer.listen(port, "0.0.0.0", () => {
     const localIPs = getLocalIPs();
+    const primaryIP = localIPs[0] ?? "localhost";
+    const pairUrl = `http://${primaryIP}:${port}/?code=${auth.pairingCodeDisplay}`;
+
     console.log(`\n┌──────────────────────────────────────────────┐`);
     console.log(`│  Agent Bridge 已启动                           │`);
     console.log(`│  配对码:  ${auth.pairingCodeDisplay}                       │`);
@@ -91,15 +95,15 @@ export function startServer(
         console.log(`│  局域网:  http://${ip}:${port}          │`);
       }
     }
-    console.log(`│  WebSocket: ws://<IP>:${port}/ws                │`);
     console.log(`│  Agents:  ${registry.list().length} 个已加载                       │`);
-    if (!auth.hasEnvToken()) {
-      console.log(`│  认证模式: 配对码（首次输入 ${auth.pairingCodeDisplay}）        │`);
-    } else {
-      console.log(`│  认证模式: 固定 token（GATEWAY_TOKEN）          │`);
-    }
     console.log(`│  远程访问: Tailscale 或局域网直连              │`);
     console.log(`└──────────────────────────────────────────────┘\n`);
+
+    // 终端渲染二维码（手机扫码自动配对）
+    console.log("扫码配对（手机扫以下二维码直接连接）：\n");
+    qrcode.generate(pairUrl, { small: true }, (qr) => {
+      console.log(qr);
+    });
   });
 
   return httpServer;
