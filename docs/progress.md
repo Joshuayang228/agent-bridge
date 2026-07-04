@@ -85,6 +85,16 @@
 - **tsc --noEmit 通过**，3 个 agent 加载正常，配对码 306796 已验证。
 - **下一步**：git commit / 打磨 Demo 体验 / OpenAI 兼容 SSE 端点。
 
+### [2026-07-04] 扫码配对 + Git 初始化
+
+- **Git 仓库初始化**：首次 commit（`330e540`），28 文件 2941 行。.gitignore 排除 _reference/node_modules/dist/.env。
+- **扫码配对完成**：Gateway 启动时在终端渲染二维码（qrcode-terminal），二维码内容为 `http://<局域网IP>:<port>/?code=<配对码>`。手机扫码 → 打开 Web App → URL 参数自动配对 → 获得 device token → 后续免输入。
+  - 终端显示配对码 + 二维码 + 局域网 IP
+  - Web App 检测 `?code=` URL 参数，自动用配对码连接
+  - Demo 体验：手机扫码即用，无需手输配对码
+- **commit**：`9fbd78e` feat: QR code pairing
+- **下一步**：多会话管理 / agent 主动推送 / OpenAI 兼容 SSE / push 到 GitHub。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
