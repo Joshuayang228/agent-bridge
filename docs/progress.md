@@ -115,6 +115,17 @@
 - **commit**：`fdbefc7` feat: capability whitelist
 - **下一步**：agent 主动推送 / OpenAI 兼容 SSE / UI 打磨 / push 到 GitHub。
 
+### [2026-07-04] UI 打磨 + GitHub push
+
+- **GitHub 仓库创建**：https://github.com/Joshuayang228/agent-bridge （gh CLI 自动创建，全部代码已 push）
+- **Markdown 渲染**：Claude Code 回复的 markdown 格式现在正确渲染（标题、列表、代码块、表格、引用块、链接）
+- **代码高亮**：highlight.js (github-dark 主题) 自动高亮代码块
+- **安全**：DOMPurify 清洗 markdown HTML，防 XSS
+- **Agent 头像**：每条 agent 消息前显示 🤖 图标
+- **CDN 引入**：marked.js + DOMPurify + highlight.js（CSS+JS），零本地依赖
+- **commit**：`222901d` feat: markdown rendering + code highlighting
+- **下一步**：agent 主动推送 / OpenAI 兼容 SSE / Demo 脚本打磨。
+
 ### [2026-07-04] Harness 回流模板 + 双源漂移修复 + 卫生清理
 
 > 本次会话为旁路整理，不动产品主线代码，只做规则基建与文档卫生。
