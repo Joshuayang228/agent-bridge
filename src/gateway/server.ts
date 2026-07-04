@@ -16,6 +16,7 @@ import type { AuthManager } from "./auth.js";
 import type { SessionManager } from "./session-manager.js";
 import type { ConnectionManager } from "./connection-manager.js";
 import { createWsHandler } from "./ws-handler.js";
+import { handleOpenAIHttp } from "./openai-http.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(__dirname, "..", "..", "web");
@@ -52,6 +53,13 @@ export function startServer(
     }
 
     const url = new URL(req.url, `http://localhost:${port}`);
+
+    // OpenAI 兼容 API 路由
+    if (url.pathname.startsWith("/v1/")) {
+      const handled = await handleOpenAIHttp(req, res, url, registry, auth);
+      if (handled) return;
+    }
+
     let filePath = url.pathname;
 
     if (filePath === "/") filePath = "/index.html";
