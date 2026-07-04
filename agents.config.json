@@ -1,0 +1,23 @@
+{
+  "agents": [
+    {
+      "id": "mock",
+      "name": "测试机器人",
+      "type": "mock",
+      "capabilities": ["chat"]
+    },
+    {
+      "id": "mock-echo",
+      "name": "回声机器人",
+      "type": "mock",
+      "capabilities": ["chat"],
+      "config": { "mode": "echo" }
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "type": "claude-code",
+      "capabilities": ["chat", "shell", "files", "tools"]
+    }
+  ]
+}

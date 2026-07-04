@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Agent Bridge</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1a1a2e; color: #eee; height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    header {
+      padding: 12px 16px; background: #16213e; border-bottom: 1px solid #0f3460;
+      display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; }
+    #status { font-size: 12px; color: #7f8c8d; margin-left: auto; }
+    #status.connected { color: #2ecc71; }
+    #status.disconnected { color: #e74c3c; }
+    #agent-select {
+      padding: 6px 10px; background: #0f3460; color: #eee;
+      border: 1px solid #1a1a4e; border-radius: 6px; font-size: 13px;
+    }
+    #messages {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .msg {
+      max-width: 85%; padding: 10px 14px; border-radius: 14px;
+      font-size: 14px; line-height: 1.5; word-break: break-word;
+    }
+    .msg.user { align-self: flex-end; background: #0f3460; }
+    .msg.agent { align-self: flex-start; background: #2c2c54; }
+    .msg.system { align-self: center; background: transparent; color: #7f8c8d; font-size: 12px; }
+    #input-bar {
+      padding: 10px 12px; background: #16213e; border-top: 1px solid #0f3460;
+      display: flex; gap: 8px;
+    }
+    #input {
+      flex: 1; padding: 10px 14px; background: #1a1a2e; color: #eee;
+      border: 1px solid #0f3460; border-radius: 20px; font-size: 14px;
+      outline: none;
+    }
+    #input:focus { border-color: #e94560; }
+    #send-btn {
+      padding: 10px 18px; background: #e94560; color: #fff;
+      border: none; border-radius: 20px; font-size: 14px; font-weight: 600;
+      cursor: pointer;
+    }
+    #send-btn:disabled { opacity: 0.4; }
+    .cursor::after { content: "▋"; animation: blink 0.8s infinite; color: #e94560; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* 工具调用 */
+    .tool {
+      align-self: flex-start; max-width: 85%; padding: 8px 12px;
+      background: #1a1a4e; border-left: 3px solid #f39c12; border-radius: 6px;
+      font-size: 12px; font-family: monospace; color: #f39c12;
+    }
+    .tool-end { border-left-color: #2ecc71; color: #2ecc71; }
+
+    /* 审批弹窗 */
+    #approval-bar {
+      display: none; padding: 12px 16px; background: #2c2c54;
+      border-top: 2px solid #e94560; flex-direction: column; gap: 8px;
+    }
+    #approval-bar.active { display: flex; }
+    #approval-bar .action {
+      font-family: monospace; font-size: 13px; color: #e94560; word-break: break-all;
+    }
+    #approval-bar .desc { font-size: 13px; color: #bbb; }
+    #approval-bar .btns { display: flex; gap: 10px; }
+    #approval-bar .approve {
+      flex: 1; padding: 10px; background: #27ae60; color: #fff;
+      border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    #approval-bar .reject {
+      flex: 1; padding: 10px; background: #c0392b; color: #fff;
+      border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+
+    /* 配对码弹窗 */
+    #pairing-overlay {
+      display: flex; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+      z-index: 100; align-items: center; justify-content: center;
+    }
+    #pairing-overlay.hidden { display: none; }
+    #pairing-box {
+      background: #16213e; padding: 28px 24px; border-radius: 16px;
+      border: 1px solid #0f3460; width: 85%; max-width: 320px; text-align: center;
+    }
+    #pairing-box h2 { font-size: 18px; margin-bottom: 8px; }
+    #pairing-box p { font-size: 13px; color: #7f8c8d; margin-bottom: 18px; }
+    #pairing-input {
+      width: 100%; padding: 14px; background: #1a1a2e; color: #eee;
+      border: 2px solid #0f3460; border-radius: 10px; font-size: 24px;
+      text-align: center; letter-spacing: 8px; outline: none;
+    }
+    #pairing-input:focus { border-color: #e94560; }
+    #pairing-error { color: #e74c3c; font-size: 12px; margin-top: 8px; height: 16px; }
+    #pairing-btn {
+      width: 100%; margin-top: 14px; padding: 12px; background: #e94560;
+      color: #fff; border: none; border-radius: 10px; font-size: 15px;
+      font-weight: 600; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- 配对码弹窗 -->
+  <div id="pairing-overlay" class="hidden">
+    <div id="pairing-box">
+      <h2>设备配对</h2>
+      <p>请输入终端显示的 6 位配对码</p>
+      <input id="pairing-input" type="text" maxlength="6" placeholder="000000" inputmode="numeric">
+      <div id="pairing-error"></div>
+      <button id="pairing-btn">配对</button>
+    </div>
+  </div>
+
+  <header>
+    <h1>Agent Bridge</h1>
+    <select id="agent-select"><option value="">加载中...</option></select>
+    <span id="status" class="disconnected">未连接</span>
+  </header>
+
+  <div id="messages"></div>
+
+  <div id="input-bar">
+    <input id="input" type="text" placeholder="输入消息..." autocomplete="off">
+    <button id="send-btn" disabled>发送</button>
+  </div>
+
+  <div id="approval-bar">
+    <div class="action" id="approval-action"></div>
+    <div class="desc" id="approval-desc"></div>
+    <div class="btns">
+      <button class="approve" id="approve-btn">✅ 批准</button>
+      <button class="reject" id="reject-btn">❌ 否决</button>
+    </div>
+  </div>
+
+  <script>
+    const $status = document.getElementById("status");
+    const $agentSelect = document.getElementById("agent-select");
+    const $messages = document.getElementById("messages");
+    const $input = document.getElementById("input");
+    const $sendBtn = document.getElementById("send-btn");
+    const $pairingOverlay = document.getElementById("pairing-overlay");
+    const $pairingInput = document.getElementById("pairing-input");
+    const $pairingError = document.getElementById("pairing-error");
+    const $pairingBtn = document.getElementById("pairing-btn");
+
+    let seq = 0;
+    let currentMsgEl = null;
+    let ws = null;
+    let pendingPair = false; // 是否在等待配对响应
+
+    // device token 持久化
+    const STORAGE_KEY = "agent-bridge-device-token";
+    function getDeviceToken() { return localStorage.getItem(STORAGE_KEY) || ""; }
+    function saveDeviceToken(token) { localStorage.setItem(STORAGE_KEY, token); }
+    function clearDeviceToken() { localStorage.removeItem(STORAGE_KEY); }
+
+    // ─── 连接 ───
+    function connectWithToken(token) {
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.onopen = () => sendReq("connect", { protocol: 1, token });
+      ws.onclose = () => {
+        $status.textContent = "已断开";
+        $status.className = "disconnected";
+      };
+      ws.onmessage = onMessage;
+    }
+
+    function connectWithPairingCode(code) {
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.onopen = () => sendReq("connect", { protocol: 1, pairingCode: code });
+      ws.onclose = () => {
+        $status.textContent = "已断开";
+        $status.className = "disconnected";
+      };
+      ws.onmessage = onMessage;
+    }
+
+    // 页面加载启动
+    function init() {
+      const token = getDeviceToken();
+      if (token) {
+        connectWithToken(token);
+      } else {
+        showPairing();
+      }
+    }
+
+    // 配对码弹窗
+    function showPairing() {
+      $pairingOverlay.classList.remove("hidden");
+      $pairingInput.focus();
+    }
+    function hidePairing() {
+      $pairingOverlay.classList.add("hidden");
+    }
+
+    $pairingBtn.addEventListener("click", () => {
+      const code = $pairingInput.value.trim();
+      if (code.length !== 6) {
+        $pairingError.textContent = "请输入 6 位配对码";
+        return;
+      }
+      $pairingError.textContent = "";
+      if (ws) ws.close();
+      connectWithPairingCode(code);
+    });
+    $pairingInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $pairingBtn.click();
+    });
+
+    init();
+
+    // ─── 握手响应处理 ───
+    function onMessage(ev) {
+      const frame = JSON.parse(ev.data);
+
+      if (frame.type === "res" && frame.ok) {
+        const payload = frame.payload;
+
+        // hello-ok 响应
+        if (payload?.agents) {
+          // 如果配对成功，保存 device token
+          if (payload.deviceToken) {
+            saveDeviceToken(payload.deviceToken);
+            pendingPair = false;
+            hidePairing();
+          }
+          $status.textContent = "已连接";
+          $status.className = "connected";
+          $sendBtn.disabled = false;
+
+          $agentSelect.innerHTML = "";
+          for (const a of payload.agents) {
+            const opt = document.createElement("option");
+            opt.value = a.id;
+            opt.textContent = a.name;
+            $agentSelect.appendChild(opt);
+          }
+          addSystem(`已连接，${payload.agents.length} 个 agent 可用`);
+        }
+
+        // chat.send 的 ack
+        if (payload?.status === "accepted") {
+          currentMsgEl = addMsg("", "agent");
+          currentMsgEl.classList.add("cursor");
+        }
+      }
+
+      // 认证失败
+      if (frame.type === "res" && !frame.ok) {
+        if (frame.error?.code === "auth-failed" || frame.error?.code === "pair-failed") {
+          clearDeviceToken();
+          showPairing();
+          $pairingError.textContent = "配对码无效，请重新输入";
+        }
+      }
+
+      // 流式事件
+      if (frame.type === "event" && frame.event === "agent") {
+        const evt = frame.payload;
+
+        if (evt.type === "delta") {
+          if (!currentMsgEl) currentMsgEl = addMsg("", "agent");
+          currentMsgEl.classList.add("cursor");
+          currentMsgEl.textContent += evt.text;
+          scrollToBottom();
+        } else if (evt.type === "tool_start") {
+          if (currentMsgEl) currentMsgEl.classList.remove("cursor");
+          addTool(evt.tool, false);
+          if (currentMsgEl) currentMsgEl.classList.add("cursor");
+        } else if (evt.type === "tool_end") {
+          addTool(`${evt.tool} → ${evt.result}`, true);
+        } else if (evt.type === "approval_required") {
+          showApproval(evt.action, evt.description);
+        } else if (evt.type === "done") {
+          if (currentMsgEl) {
+            currentMsgEl.textContent = evt.text;
+            currentMsgEl.classList.remove("cursor");
+          } else {
+            addMsg(evt.text, "agent");
+          }
+          currentMsgEl = null;
+        } else if (evt.type === "error") {
+          if (currentMsgEl) {
+            currentMsgEl.textContent = `[错误] ${evt.message}`;
+            currentMsgEl.classList.remove("cursor");
+          } else {
+            addMsg(`[错误] ${evt.message}`, "agent");
+          }
+          currentMsgEl = null;
+        }
+      }
+    };
+
+    // ─── 发送消息 ───
+    $sendBtn.addEventListener("click", sendMessage);
+    $input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+
+    function sendMessage() {
+      const text = $input.value.trim();
+      if (!text) return;
+      const agentId = $agentSelect.value;
+      if (!agentId) return;
+
+      addMsg(text, "user");
+      $input.value = "";
+
+      sendReq("chat.send", { agentId, message: text, sessionId: "default" });
+    }
+
+    // ─── 工具函数 ───
+    function sendReq(method, params) {
+      ws.send(JSON.stringify({ type: "req", id: `${++seq}`, method, params }));
+    }
+
+    function addTool(text, isEnd) {
+      const el = document.createElement("div");
+      el.className = "tool" + (isEnd ? " tool-end" : "");
+      el.textContent = isEnd ? text : `🔧 ${text}`;
+      $messages.appendChild(el);
+      scrollToBottom();
+    }
+
+    function showApproval(action, description) {
+      const $bar = document.getElementById("approval-bar");
+      document.getElementById("approval-action").textContent = `$ ${action}`;
+      document.getElementById("approval-desc").textContent = description;
+      $bar.classList.add("active");
+    }
+
+    function hideApproval() {
+      document.getElementById("approval-bar").classList.remove("active");
+    }
+
+    document.getElementById("approve-btn").addEventListener("click", () => {
+      sendReq("chat.approve", {});
+      hideApproval();
+    });
+    document.getElementById("reject-btn").addEventListener("click", () => {
+      sendReq("chat.reject", {});
+      hideApproval();
+    });
+
+    function addMsg(text, role) {
+      const el = document.createElement("div");
+      el.className = `msg ${role}`;
+      el.textContent = text;
+      $messages.appendChild(el);
+      scrollToBottom();
+      return el;
+    }
+
+    function addSystem(text) {
+      const el = document.createElement("div");
+      el.className = "msg system";
+      el.textContent = text;
+      $messages.appendChild(el);
+    }
+
+    function scrollToBottom() {
+      $messages.scrollTop = $messages.scrollHeight;
+    }
+  </script>
+</body>
+</html>
