@@ -3,3 +3,4 @@ dist/
 _reference/
 *.log
 .env
+.git-commit-msg.txt

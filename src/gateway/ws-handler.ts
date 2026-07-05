@@ -20,6 +20,7 @@ import type {
 } from "../protocol/frames.js";
 import { PROTOCOL_VERSION, SERVER_NAME } from "../protocol/frames.js";
 import type { AuthManager } from "./auth.js";
+import type { SessionWatcher } from "./session-watcher.js";
 
 // 每个连接的会话状态
 interface SessionState {
@@ -36,6 +37,7 @@ export function createWsHandler(
   auth: AuthManager,
   sessions: SessionManager,
   connections: ConnectionManager,
+  sessionWatcher: SessionWatcher,
 ) {
   return function handleConnection(ws: WebSocket) {
     const state: SessionState = {
@@ -65,7 +67,7 @@ export function createWsHandler(
       }
 
       if (frame.type === "req") {
-        await handleReq(ws, frame, state, registry, sessions);
+        await handleReq(ws, frame, state, registry, sessions, sessionWatcher);
       }
     });
   };
@@ -129,6 +131,7 @@ async function handleReq(
   state: SessionState,
   registry: ProviderRegistry,
   sessions: SessionManager,
+  sessionWatcher: SessionWatcher,
 ) {
   switch (frame.method) {
     case "agents.list":
@@ -160,7 +163,7 @@ async function handleReq(
     }
 
     case "chat.send": {
-      await handleChatSend(ws, frame, state, registry, sessions);
+      await handleChatSend(ws, frame, state, registry, sessions, sessionWatcher);
       break;
     }
 
@@ -208,6 +211,7 @@ async function handleChatSend(
   state: SessionState,
   registry: ProviderRegistry,
   sessions: SessionManager,
+  sessionWatcher: SessionWatcher,
 ) {
   const params = (frame.params ?? {}) as {
     agentId: string;
@@ -233,11 +237,27 @@ async function handleChatSend(
 
   let fullResponse = "";
 
+  // 按 agent 类型取对应 adapter（claude-code / codex 等）当前跟踪的外部 session id
+  // 让 provider 续接该 session —— 手机消息会接着电脑前跑的对话上下文继续。
+  // 没有正在跟踪的外部 session 时返回 undefined，provider 会开新会话。
+  const adapterId = provider.info.type;
+  const resumeSessionId = sessionWatcher.getCurrentSessionId(adapterId) ?? undefined;
+  // 取该 session 对应的项目 cwd —— CC --resume 在 spawn cwd 编码的目录里找 session 文件，
+  // 不传 cwd 会找不到（跨项目 session 必须切到原项目目录跑）
+  const cwd = sessionWatcher.getCurrentCwd(adapterId) ?? undefined;
+
+  // 暂停 session watcher 推送：provider 写入 session 文件时 watcher 会监听到，
+  // 但这些内容 provider 已经通过 stdout 直接推给手机了，不重复推。
+  // 跑完 resume 时把 size 重置到文件末尾，跳过中间写入的内容。
+  sessionWatcher.suspend(adapterId);
+
   try {
     const events = provider.send({
       sessionId: params.sessionId,
       agentId: params.agentId,
       message: params.message,
+      resumeSessionId,
+      cwd,
       requestApproval: (action, description) => {
         return new Promise<boolean>((resolve) => {
           send(ws, makeEvent(state, "agent", { type: "approval_required", action, description }));
@@ -261,6 +281,7 @@ async function handleChatSend(
     const message = err instanceof Error ? err.message : String(err);
     send(ws, makeEvent(state, "agent", { type: "error", message }));
   } finally {
+    sessionWatcher.resume(adapterId);
     state.runningController = null;
   }
 }

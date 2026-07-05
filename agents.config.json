@@ -1,23 +1,6 @@
 {
   "agents": [
     {
-      "id": "mock",
-      "name": "测试机器人",
-      "type": "mock",
-      "capabilities": ["chat"],
-      "schedule": {
-        "intervalMs": 60000,
-        "prompt": "主动打个招呼，说一句简短的话"
-      }
-    },
-    {
-      "id": "mock-echo",
-      "name": "回声机器人",
-      "type": "mock",
-      "capabilities": ["chat"],
-      "config": { "mode": "echo" }
-    },
-    {
       "id": "claude-code",
       "name": "Claude Code",
       "type": "claude-code",

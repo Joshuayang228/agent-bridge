@@ -16,6 +16,20 @@ export interface AgentInput {
    * 等手机端批准/否决后 resolve(true/false)。
    */
   requestApproval?: (action: string, description: string) => Promise<boolean>;
+  /**
+   * 可选：复用外部 CC 的 session —— 续接电脑前跑的对话上下文
+   * ClaudeCodeProvider 收到后会加 --resume <id> 参数
+   * 仅 type === "claude-code" 的 agent 生效
+   */
+  resumeSessionId?: string;
+
+  /**
+   * 可选：spawn agent CLI 子进程时用的工作目录
+   * 续接外部 session 时必须设为该 session 对应的项目 cwd，
+   * 否则 CC 在 Gateway 当前 cwd 找不到 session 文件（CC 按 cwd 编码找目录）
+   * 不传时 provider 回退到 process.cwd()
+   */
+  cwd?: string;
 }
 
 // ─── 输出：流式事件（参考 OpenClaw 两阶段模型）───

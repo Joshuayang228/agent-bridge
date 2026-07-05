@@ -166,3 +166,47 @@
 - **卫生清理**：删除误建的根目录 `openclaw/`（仅空 .git，与 `_reference/openclaw-1` 撞名易混）；确认 `_reference/openclaw-1/openclaw-main/` 参考仓库完整。
 - **验证**：tsc --noEmit 通过，骨架健康。
 - **下一步**：回到产品主线——git commit / 打磨 Demo 体验 / OpenAI 兼容 SSE 端点。
+
+### [2026-07-04] CC 接通验证 + Web App Demo 打磨
+
+- **ClaudeCodeProvider 实测通过**（OpenAI 兼容 API）：
+  - 非流式：`POST /v1/chat/completions` model=claude-code → 返回 `Opus 4.8` 正常回复 ✓
+  - 流式：`stream:true` → SSE `data: {chunk}\n\n` + `data: [DONE]` ✓
+  - Windows 下 `spawn("claude", args, { shell: true })` 能正确解析 `claude.cmd`
+- **Web App Demo 打磨**（10 项体验改进）：
+  - 空状态欢迎卡片：首次进入显示 agent 介绍 + 可点击的示例 prompt（按 agent 类型动态生成，含"审批演示""危险操作"等标签）
+  - agent 能力标签：选择 agent 后顶部显示 capabilities 标签（shell 标红）
+  - 思考中状态：发送后立即显示三点跳动动画，ack 后切换为 cursor 闪烁
+  - 工具调用分类样式：Bash(🖥️红)/Read(📄蓝)/Write/Edit(✏️橙)/Grep/Glob(🔍绿)，便于一眼分辨
+  - 审批弹窗增强：显示 agent 名 + ⚠️ 危险图标 + toast 提示
+  - 代码块复制按钮：hover 显示"复制"，复制成功显示 ✓ 已复制
+  - WS 自动重连：非认证失败断线时指数退避重连（最多 30s），状态显示"重连中(N)"
+  - 配对码只允许数字 + 满 6 位自动提交
+  - 网络错误 toast 提示
+  - PWA 支持：manifest.json + icon.svg + apple-touch-icon，手机可"添加到主屏幕"作为独立 App
+- **Bug 修复（自审发现）**：配对成功后断线重连仍用已失效的 pair code → 改为 pair 成功后 `lastConnectToken` 切换为 token 模式
+- **验证**：tsc --noEmit 通过，32 单元测试全过
+- **下一步**：git commit / 写 README / 接 my-agent。
+
+### [2026-07-05] SessionWatcher 抽象重构 + CC 跨项目续接 + EBADF 根因定位
+
+- **SessionWatcher 抽象重构（方案 B）**：把 CCWatcher 重构成通用 `SessionWatcher` + `SessionAdapter` 接口，同时支持 CC 和 Codex。
+  - `SessionAdapter` 接口：`getRootDir` / `findLatestFile` / `extractSessionId` / `extractCwd` / `parseLine`
+  - `CCAdapter`：扫描 `~/.claude/projects/` 下所有子目录的 `.jsonl`，选 mtime 最新的（跨项目支持）
+  - `CodexAdapter`：扫描 `~/.codex/sessions/YYYY/MM/DD/` 下的 `rollout-*.jsonl`
+  - 事件统一广播为 `external_session_event`，payload 含 `{ adapterId, data: AgentEvent }`
+- **手机续接外部 CC 的 session**：手机发消息时用 `--resume <sessionId>` 续接电脑前跑的对话上下文。
+  - `AgentInput` 加 `cwd?` 字段：CC `--resume` 在 spawn cwd 编码的目录里找 session 文件，跨项目必须切到原项目目录跑
+  - `extractCwd` 从 session 文件提取 cwd：CC 在 user message 行的 `cwd` 字段，Codex 在 `session_meta.payload.cwd`
+  - ws-handler.ts：`sessionWatcher.getCurrentSessionId(adapterId)` + `getCurrentCwd(adapterId)` 取 session id 和 cwd 传给 provider
+- **suspend/resume 机制**：手机端主动调 provider 时，provider 写入 session 文件会触发 watcher 重复推送。在 `provider.send` 前 suspend adapter，跑完 resume 时把 size 重置到文件末尾跳过中间写入。
+  - fs.watch 回调也检查 suspended 状态（避免并发文件访问冲突）
+- **CC 真流式输出**：启用 `--include-partial-messages`，`stream_event.content_block_delta.text_delta` → delta（token-by-token）
+- **EBADF 根因定位与修复**（关键坑，详见 pitfalls.md）：
+  - 现象：服务器 spawn CC `--resume` 时报 `Failed to resume session: EBADF: bad file descriptor, write`
+  - 排查：命令行直接跑同样命令成功 → spawn-test.mjs 独立跑成功 → 服务器跑失败
+  - 根因：**`npm start` / `npm run dev` 会用 `cmd /c` 包一层，重定向子进程 stdout**，导致 tsx 进程的 stdout 不是 TTY，spawn 的 CC 子进程继承了无效的 fd，写 session 文件时报 EBADF
+  - 修复：`start.bat` 改用 `npx tsx src/index.ts` 直接启动，绕过 npm 的 cmd 包装
+- **Codex adapter extractCwd bug 修复**：8KB 缓冲区不够覆盖 codex session_meta 第一行（很长），改用循环读取直到遇到换行符（最多 256KB）
+- **验证**：tsc --noEmit 通过，32 单元测试全过，e2e-test.mjs 端到端测试成功（CC 续接 session 流式输出正常）
+- **下一步**：多会话独立续接（当前所有手机会话共享同一个 ccSessionId）/ Codex CLI 接入测试。
