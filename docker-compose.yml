@@ -1,0 +1,23 @@
+# Agent Bridge Relay - 云端部署
+# 使用：在服务器上创建 /root/agent-bridge-relay/ 目录，上传代码 + 此文件，
+# 创建 .env 填入 RELAY_TOKEN，然后 docker compose up -d --build
+services:
+  relay:
+    build: .
+    container_name: agent-bridge-relay
+    restart: unless-stopped
+    ports:
+      - "18790:18790"
+    environment:
+      - RELAY_TOKEN=${RELAY_TOKEN}
+      - RELAY_PORT=18790
+      - RELAY_PUBLIC_URL=http://1.12.224.119:18790
+    volumes:
+      # SQLite 数据库持久化到宿主机
+      - ./data:/root/.agent-bridge
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:18790/pair', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

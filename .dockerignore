@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.example
+docs
+_reference
+*.md
+*.log
+.git-commit-msg.txt
+src/__tests__
+src/**/__tests__
+vitest.config.ts
+start.bat
