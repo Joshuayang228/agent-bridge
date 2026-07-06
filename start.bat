@@ -2,39 +2,38 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-rem ─── 检查 Node.js ───
+rem === Check Node.js ===
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [错误] 未检测到 Node.js，请先安装：https://nodejs.org/
+  echo [Error] Node.js not found. Install from https://nodejs.org/
   pause
   exit /b 1
 )
 
-rem ─── 首次启动自动安装依赖 ───
+rem === Auto install deps on first run ===
 if not exist node_modules (
-  echo [初始化] 首次启动，正在安装依赖...
+  echo [Init] First run, installing dependencies...
   call npm install
   if errorlevel 1 (
-    echo [错误] 依赖安装失败，请检查网络或 npm 配置
+    echo [Error] npm install failed
     pause
     exit /b 1
   )
-  echo [初始化] 依赖安装完成
+  echo [Init] Dependencies installed
   echo.
 )
 
 echo ============================================
-echo   Agent Bridge 启动中...
-echo   扫码页:    http://localhost:18789/pair
-echo   按 Ctrl+C 停止服务
+echo   Agent Bridge starting...
+echo   Pair page: http://localhost:18789/pair
+echo   Press Ctrl+C to stop
 echo ============================================
 echo.
 
-rem ─── 延迟 3 秒后自动打开浏览器到 /pair 页面 ───
+rem === Open browser to /pair after 3s ===
 start /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process 'http://localhost:18789/pair'"
 
-rem ─── 启动服务器 ───
-rem 必须用 npx tsx 直接启动，不能用 npm start / npm run dev
-rem 原因：npm 会用 cmd /c 包一层，重定向子进程 stdout，导致 spawn CC 子进程时
-rem       CC 继承无效的 fd，写 session 文件时报 EBADF: bad file descriptor
+rem === Start server (MUST use npx tsx, NOT npm start / npm run dev) ===
+rem Reason: npm wraps with cmd /c and redirects stdout, causing CC child
+rem         process to inherit invalid fd, triggering EBADF on session write.
 npx tsx src/index.ts
