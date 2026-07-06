@@ -6,14 +6,14 @@
 
 **自用工具**（2026-07-06 退出 Trae 大赛）：手机遥控家里 agent 的「通道」——agent 跑在电脑上，人在外面用手机指挥、看进度、危险动作远程批准/否决。定位是「揣在兜里的操作员驾驶舱」。
 
-**已落地**：Node.js/TS Gateway + Web App + WS JSON-RPC + 扫码配对 + 多会话 + 能力白名单 + ClaudeCodeProvider + OpenAI 兼容 API + SessionWatcher（CC/Codex 续接）。GitHub: https://github.com/Joshuayang228/agent-bridge
+**已落地**：Node.js/TS Gateway + Web App + WS JSON-RPC + 扫码配对 + 多会话 + 能力白名单 + ClaudeCodeProvider + OpenAI 兼容 API + SessionWatcher（CC/Codex 续接）+ **云端 Relay + SQLite 持久化**（断连重连拉历史 + 审批状态全局化 + agent 状态广播）。GitHub: https://github.com/Joshuayang228/agent-bridge
 
 **参考教材**：`_reference/openclaw-1/`、`_reference/paseo-main/`（2026-07-06 新增）
 
 **下一步优先级**（自用导向）：
-1. 接 my-agent 作为首要下游 Provider
-2. 远程穿透（Tailscale / relay，对照 paseo）
-3. 日常体验打磨（多会话独立续接、推送通知等）
+1. 部署云端 VPS（WSS + 域名 + Caddy 反代）——relay 代码已就绪，待真实环境打磨
+2. 接 my-agent 作为首要下游 Provider
+3. 日常体验打磨（chat.send 通过 relay 上行、推送通知等）
 
 ---
 
@@ -218,3 +218,27 @@
 - **规则更新**：AGENTS.md / CLAUDE.md 同步改写——my-agent 升为首要下游、可参考/集成 openclaw 与 paseo、安全从「亮点」回归「底线」。
 - **Paseo 参考入库**：浅克隆 `getpaseo/paseo` 到 `_reference/paseo-main/`（与 openclaw 并列），重点对照 relay 远程访问、多 agent 编排、移动端 UX。
 - **下一步**：接 my-agent / 远程穿透 / 日常体验。
+
+### [2026-07-06] 云端 Relay + SQLite 持久化 全链路落地
+
+> 解决「远程访问不稳定、断了看不到历史、审批状态丢失」三大痛点。需求文档：`docs/relay-persistence-spec.md`。
+
+**5 步实施全部完成**（commit `bf935ad` → `3325f0e` → `0ff8e41` → `860e24c`）：
+
+1. **SQLite 持久化层 + relay server 骨架**（`src/relay/timeline-store.ts` + `src/relay/server.ts`）—— `better-sqlite3` WAL 模式，timeline 事件 + agent 状态 + 审批表；relay 接收 agent_event 持久化 + 回 ACK + 转发给在线手机
+2. **家里 Gateway outbound 连云端 relay**（`src/relay/agent-client.ts`）—— 穿透 NAT 不走 P2P 打洞；send buffer + ACK 机制，重连补发未确认事件；`ConnectionManager` 事件广播同步推 relay
+3. **手机端断连重连拉历史**（`web/index.html`）—— relay mode 标志注入；维护 `lastSeq`，重连后发 `history_since(lastSeq)` 拉增量；`historySince` 去重
+4. **审批状态持久化 + 请求上行**（`ConnectionManager` 全局化 `pendingApproval`/`runningController`）—— 手机断连重连后新 ws 也能访问未决审批；`chat.approve`/`reject`/`abort` 通过 relay 上行（`MobileResponse` 协议帧，不持久化只转发）
+5. **agent 状态广播 + 部署打磨**—— agent 上下线 EventFrame 推送（`agent_status` 事件，seq=0 不参与 timeline）；手机端 `agentStatusCache` + 上下线标记 + 系统提示；`npm run start:relay` 脚本 + `--relay` 命令行参数；`.env` 自动加载 + `.env.example` 配置模板；`RELAY_PUBLIC_URL` 环境变量
+
+**测试**：9 文件 63 测试全过（含 3 个端到端集成测试：mobile-history / approval-persistence / agent-status-broadcast）。tsc 零错误。
+
+**剩余待办**（依赖真实 VPS）：
+- WSS（Caddy 反代 + Let's Encrypt 证书）
+- 生产部署文档
+
+**关键协议**：
+- Gateway → relay：`agent_event` 信封（带 clientSeq）+ `mobile_response`（res 帧，不持久化）
+- relay → Gateway：`agent_event_ack`（带 serverSeq）+ 透传手机 req 帧
+- relay → 手机：EventFrame（`type:event`），`agent_status` 事件 seq=0
+- 手机 → relay：`history_since` req 拉增量 + `chat.approve`/`reject`/`abort` req 上行
