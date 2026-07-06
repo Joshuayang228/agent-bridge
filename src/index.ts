@@ -1,6 +1,14 @@
 /**
  * Agent Bridge 入口
  * 加载 agent 配置 → 启动 Gateway 服务器
+ *
+ * 环境变量（可选）：
+ *   RELAY_URL    —— 云端 relay 的 WS URL，如 ws://relay.example.com:18790/agent
+ *   AGENT_TOKEN  —— 连 relay 的鉴权 token（需与 relay 端 RELAY_TOKEN 一致）
+ *   AGENT_ID     —— Gateway 标识，默认 hostname-随机
+ *   RELAY_MODE   —— start:relay 时启动云端 relay 服务
+ *   RELAY_TOKEN  —— relay 模式下的鉴权 token
+ *   RELAY_PORT   —— relay 监听端口，默认 18790
  */
 
 import { ProviderRegistry } from "./providers/registry.js";
@@ -13,6 +21,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { hostname } from "node:os";
+import { RelayAgentClient } from "./relay/agent-client.js";
+import { startRelayServer } from "./relay/server.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, "..", "agents.config.json");
@@ -51,8 +62,52 @@ async function main() {
     cron.start(schedules);
   }
 
+  // 根据模式启动
+  const mode = process.env.RELAY_MODE;
+  if (mode === "relay") {
+    // 云端 relay 模式
+    const relayToken = process.env.RELAY_TOKEN;
+    if (!relayToken) {
+      console.error("[main] relay 模式需要 RELAY_TOKEN 环境变量");
+      process.exit(1);
+    }
+    startRelayServer({
+      relayToken,
+      port: Number(process.env.RELAY_PORT) || undefined,
+      auth,
+    });
+    return;
+  }
+
+  // Gateway 模式（默认）
   const port = Number(process.env.PORT) || 18789;
   startServer(registry, auth, sessions, connections, port);
+
+  // 如果配置了 RELAY_URL，启动 relay client（家里 Gateway 连云端）
+  const relayUrl = process.env.RELAY_URL;
+  const agentToken = process.env.AGENT_TOKEN;
+  if (relayUrl && agentToken) {
+    const agents = registry.list();
+    const primaryAgent = agents[0];
+    const relayClient = new RelayAgentClient({
+      relayUrl,
+      token: agentToken,
+      agentId: process.env.AGENT_ID,
+      agentInfo: {
+        name: primaryAgent?.name ?? hostname(),
+        type: primaryAgent?.type ?? "gateway",
+        capabilities: primaryAgent?.capabilities ?? [],
+      },
+      onStatusChange: (status, detail) => {
+        console.log(`[relay] 状态: ${status}${detail ? ` (${detail})` : ""}`);
+      },
+    });
+    connections.setRelayClient(relayClient);
+    relayClient.connect();
+    console.log(`[main] relay client 已启动，连接 ${relayUrl}`);
+  } else {
+    console.log("[main] 未配置 RELAY_URL/AGENT_TOKEN，仅 LAN/Tailscale 模式");
+  }
 }
 
 main().catch((err) => {

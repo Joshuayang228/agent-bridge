@@ -67,7 +67,7 @@ export function createWsHandler(
       }
 
       if (frame.type === "req") {
-        await handleReq(ws, frame, state, registry, sessions, sessionWatcher);
+        await handleReq(ws, frame, state, registry, sessions, sessionWatcher, connections);
       }
     });
   };
@@ -132,6 +132,7 @@ async function handleReq(
   registry: ProviderRegistry,
   sessions: SessionManager,
   sessionWatcher: SessionWatcher,
+  connections: ConnectionManager,
 ) {
   switch (frame.method) {
     case "agents.list":
@@ -163,7 +164,7 @@ async function handleReq(
     }
 
     case "chat.send": {
-      await handleChatSend(ws, frame, state, registry, sessions, sessionWatcher);
+      await handleChatSend(ws, frame, state, registry, sessions, sessionWatcher, connections);
       break;
     }
 
@@ -212,6 +213,7 @@ async function handleChatSend(
   registry: ProviderRegistry,
   sessions: SessionManager,
   sessionWatcher: SessionWatcher,
+  connections: ConnectionManager,
 ) {
   const params = (frame.params ?? {}) as {
     agentId: string;
@@ -260,7 +262,7 @@ async function handleChatSend(
       cwd,
       requestApproval: (action, description) => {
         return new Promise<boolean>((resolve) => {
-          send(ws, makeEvent(state, "agent", { type: "approval_required", action, description }));
+          connections.deliver(ws, makeEvent(state, "agent", { type: "approval_required", action, description }));
           state.pendingApproval = resolve;
         });
       },
@@ -270,7 +272,7 @@ async function handleChatSend(
       if (controller.signal.aborted) break;
       if (evt.type === "delta") fullResponse += evt.text;
       if (evt.type === "done" && evt.text) fullResponse = evt.text;
-      send(ws, makeEvent(state, "agent", evt));
+      connections.deliver(ws, makeEvent(state, "agent", evt));
     }
 
     // 存 assistant 回复
@@ -279,7 +281,7 @@ async function handleChatSend(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    send(ws, makeEvent(state, "agent", { type: "error", message }));
+    connections.deliver(ws, makeEvent(state, "agent", { type: "error", message }));
   } finally {
     sessionWatcher.resume(adapterId);
     state.runningController = null;

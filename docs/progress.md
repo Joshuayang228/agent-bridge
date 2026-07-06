@@ -4,15 +4,16 @@
 
 ## 当前状态
 
-**选题已转向**（桌宠方案废弃）：改做 **手机遥控 agent 的「通道」** —— agent 跑在家里的电脑上（有手、能跑 shell、能控文件），人在外面用手机（借现成 IM，方向 A）指挥它干活、看进度、在危险动作前远程批准/否决。定位是「揣在兜里的操作员驾驶舱」，不是又一个聊天 bot。
+**自用工具**（2026-07-06 退出 Trae 大赛）：手机遥控家里 agent 的「通道」——agent 跑在电脑上，人在外面用手机指挥、看进度、危险动作远程批准/否决。定位是「揣在兜里的操作员驾驶舱」。
 
-**为什么转向**：fork my-agent 参赛会把整套引擎 IP 随提交物一起授权给主办方，代价太大。改为**从 0 到 1 独立开发**，比赛包只含这一个干净的通道工具，my-agent 一行源码不进包。
+**已落地**：Node.js/TS Gateway + Web App + WS JSON-RPC + 扫码配对 + 多会话 + 能力白名单 + ClaudeCodeProvider + OpenAI 兼容 API + SessionWatcher（CC/Codex 续接）。GitHub: https://github.com/Joshuayang228/agent-bridge
 
-**已定**：自建 Web App 手机端 + Node.js/TS Gateway（不借 IM，方向 A 已被覆盖）。参考项目 openclaw（GitHub `openclaw/openclaw`）拉到 `_reference/openclaw-1/` 当教材，只读不抄，参赛代码从 0 新写。已从 my-agent 搬来自包含 harness（7 份 agent-skills + 自包含 CLAUDE.md）。
+**参考教材**：`_reference/openclaw-1/`、`_reference/paseo-main/`（2026-07-06 新增）
 
-**技术栈已定**：Node.js + TypeScript Gateway + Web App（浏览器打开即用），多 agent = 多引擎接入（Gateway 定义 AgentProvider 接口对接多个 agent 后端），通讯协议参考 OpenClaw 的 WS JSON-RPC + 流式事件 + OpenAI 兼容 SSE。
-
-**待办**：① 设计 Gateway 多引擎架构（AgentProvider 接口 + 路由 + 流式协议）② 搭项目骨架 ③ 实现 WS 协议层 + mock provider 验证链路 ④ 搭 Web App 最小页 ⑤ 确认赛程时间节点。
+**下一步优先级**（自用导向）：
+1. 接 my-agent 作为首要下游 Provider
+2. 远程穿透（Tailscale / relay，对照 paseo）
+3. 日常体验打磨（多会话独立续接、推送通知等）
 
 ---
 
@@ -210,3 +211,10 @@
 - **Codex adapter extractCwd bug 修复**：8KB 缓冲区不够覆盖 codex session_meta 第一行（很长），改用循环读取直到遇到换行符（最多 256KB）
 - **验证**：tsc --noEmit 通过，32 单元测试全过，e2e-test.mjs 端到端测试成功（CC 续接 session 流式输出正常）
 - **下一步**：多会话独立续接（当前所有手机会话共享同一个 ccSessionId）/ Codex CLI 接入测试。
+
+### [2026-07-06] 退出大赛，转向自用 + Paseo 参考入库
+
+- **战略转向**：不再参加 Trae 大赛，项目改为**个人自用工具**。解除原约束：IP 隔离、必须从零写、Demo 导向。
+- **规则更新**：AGENTS.md / CLAUDE.md 同步改写——my-agent 升为首要下游、可参考/集成 openclaw 与 paseo、安全从「亮点」回归「底线」。
+- **Paseo 参考入库**：浅克隆 `getpaseo/paseo` 到 `_reference/paseo-main/`（与 openclaw 并列），重点对照 relay 远程访问、多 agent 编排、移动端 UX。
+- **下一步**：接 my-agent / 远程穿透 / 日常体验。

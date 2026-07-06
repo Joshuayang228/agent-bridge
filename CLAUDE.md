@@ -1,30 +1,32 @@
-# CLAUDE.md — trae大赛 项目权威规则
+# CLAUDE.md — agent-bridge 项目权威规则
 
-> 本文件是本项目面向所有开发 Agent（Claude Code 主力，偶尔 Cursor / Codex）的**唯一权威规则源**，且**自包含**——本项目将来作为独立参赛仓库在 Trae 中打开时，上层 vault 的 CLAUDE.md 不会加载，故全套规则须在此齐备。
+> 本文件是本项目面向所有开发 Agent（Claude Code 主力，偶尔 Cursor / Codex）的**唯一权威规则源**，且**自包含**——本项目作为独立仓库打开时，上层 vault 的 CLAUDE.md 不会加载，故全套规则须在此齐备。
+> 目录名仍叫 `trae大赛/`（历史命名），产品名 **agent-bridge**（GitHub: `Joshuayang228/agent-bridge`）。
 > 高频、强约束、必须默认执行的规则写在正文常驻；低频、场景化的详细规则放 `docs/agent-skills/`，按索引表引导按需读取。
 
 ## 项目定位
 
-trae大赛是一件 Trae 大赛参赛作品：**一根「够得着 agent」的通道**——agent 跑在用户的电脑/家里（有手、能跑 shell、能控文件），人在外面用手机就能指挥它干活、看它跑到哪、在关键动作上拍板（批准/否决）。
+**自用工具**：一根「够得着 agent」的通道——agent 跑在家里电脑上（有手、能跑 shell、能控文件），人在外面用手机指挥它干活、看进度、在关键动作上拍板（批准/否决）。
 
 核心不是再造一个 agent，而是做**「揣在兜里的操作员驾驶舱」**：远程操控一个有手的 agent，并在小屏上完成人类监督。
 
 产品方向优先保护：
 
-- **通道是 agent 无关的网关**——定一个极简协议，任何后端 agent 都能挂上来获得手机通道。参赛交的是这个干净的通用网关（配一个从零的极简 demo agent 即可演示），[my-agent](file:///d:/瓶盖的AI碎碎念/积核/项目/个人项目/my-agent) 只是私下接上去的第一个「下游」，**其源码不进比赛包**。
-- **安全即亮点**——一个能跑 shell、能控电脑的 agent 一旦开远程口子就是实打实的攻击面。配对鉴权、能力白名单、破坏性操作「手机确认」既是不做不行的安全底线，也是评审眼里漂亮的交互。安全和亮点在这里是同一件事。
-- **从 0 到 1，不 fork**——为规避比赛授权条款把整套引擎 IP 一起交出去的风险，参赛代码全部从零写。openclaw 等成熟项目只进 `_reference/` 当教材，只读不抄。
+- **通道是 agent 无关的网关**——极简协议，任何后端 agent 都能挂上来获得手机通道。[my-agent](../my-agent) 是**首要下游**，目标把它真正接进来日常用；Claude Code / Codex 等 CLI 已作为 Provider 接入。
+- **安全是底线**——能跑 shell、能控电脑的 agent 一旦开远程口子就是实打实的攻击面。配对鉴权、能力白名单、破坏性操作「手机确认」必须默认开启，自用也不能裸奔。
+- **先研究后落地**——`_reference/` 里的 openclaw、paseo 等成熟方案优先对照；能借鉴设计就借鉴，能直接集成就集成，不必为「从零写」而从零写。注意许可证（paseo 为 AGPL-3.0）。
 
-**性质**：技术探索 / 个人成长 / 参赛冲刺
-**状态**：进行中 —— 骨架已落地（WS JSON-RPC + MockProvider + ClaudeCodeProvider + 审批机制 + Web App），进入**认证与远程访问阶段**。技术栈：Node.js + TypeScript。
+**性质**：个人工具 / 技术探索
+**状态**：进行中 —— 骨架已落地（WS JSON-RPC + MockProvider + ClaudeCodeProvider + 审批机制 + Web App + 扫码配对 + 多会话 + 能力白名单 + OpenAI 兼容 API）。下一步：**接 my-agent**、远程穿透打磨、日常自用体验。
 
 ## 背景上下文
 
-- **赛制要求**：只要用 Trae 开发即可，作品形态不限。
-- **手机端形态**：自建 Web App（浏览器打开即用，Gateway 托管静态页 + WebSocket）。零安装、跨平台、Demo 最直观（扫码即用）。此前方案 A（借 IM）已评估后放弃——交互受限、流式体验差、多 agent 路由难表达。
+- **不再参赛**（2026-07-06 决定）：原 Trae 大赛约束（IP 隔离、从零写、Demo 导向）全部解除，以「自己天天用得上」为优先级。
+- **手机端形态**：自建 Web App（浏览器打开即用，Gateway 托管静态页 + WebSocket）。零安装、跨平台、扫码即用。PWA 可添加到主屏幕。
 - **技术栈**：Node.js + TypeScript Gateway，单进程单端口复用 WS + HTTP + 静态托管，通讯协议参考 OpenClaw 的 WS JSON-RPC + 流式事件。
-- **参考项目**：[openclaw/openclaw](https://github.com/openclaw/openclaw)（"个人 AI 助手，any OS any platform"）——放 `_reference/`，重点偷师"手机 ↔ 家里 agent 的连接方式（穿透 + 鉴权 + 实时性）"，这是通道最难也最值得学的核心。
-- **待补充**：赛程时间节点（提交截止、评审时间）、评审维度权重。
+- **参考项目**（均在 `_reference/`，按需深读）：
+  - [openclaw/openclaw](https://github.com/openclaw/openclaw) — 手机 ↔ 家里 agent 的连接方式（穿透 + 鉴权 + 实时性）
+  - [getpaseo/paseo](https://github.com/getpaseo/paseo) — 多 agent 编排 + 跨设备 + relay 远程访问（与本品高度重合，重点对照）
 
 ## 启动上下文
 
@@ -111,14 +113,15 @@ trae大赛是一件 Trae 大赛参赛作品：**一根「够得着 agent」的�
 ### 闸 2：先研究后协作（硬门）
 
 接到需求先查参考，再搜外部，不要直接自己实现。搜索优先级：
-1. 项目 `_reference/` 内的参考项目（openclaw 等）
-2. GitHub / npm / 社区成熟方案
-3. 最后才自研
+1. 项目 `_reference/` 内的参考项目（openclaw、paseo 等）
+2. 关联项目 [my-agent](../my-agent) 的已有实现
+3. GitHub / npm / 社区成熟方案
+4. 最后才自研
 
-自己实现前必须说明：**搜了什么、为什么现有方案不适用**。
+自己实现前必须说明：**搜了什么、为什么现有方案不适用（或为何选择集成而非自研）**。
 **豁免**（一句话说明理由即可）：行业标准库常规集成、纯 UI 或 <3 文件小改动、已批准方案指定了实现方式的子任务。
 
-> 注意本项目的成长哲学：openclaw 等只读不抄，学透设计思路后用自己的代码从零实现，不拿别人现成完整方案。
+> 自用模式下优先交付可用性：成熟模块可集成或移植，但须注明许可证约束，并保持 Gateway 协议层清晰可维护。
 
 ### 闸 3：完成前按序验证
 
@@ -181,7 +184,7 @@ trae大赛是一件 Trae 大赛参赛作品：**一根「够得着 agent」的�
 ```
 trae大赛/
 ├── CLAUDE.md              ← 本文件（自包含权威规则）
-├── _reference/            ← 参考项目（openclaw 等），只读不抄
+├── _reference/            ← 参考项目（openclaw、paseo 等）
 └── docs/
     ├── progress.md        ← 进展追踪
     ├── decisions.md       ← 关键决策记录
