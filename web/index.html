@@ -399,6 +399,7 @@
     let ws = null;
     let currentSessionId = null;
     let agentsCache = []; // 缓存 agents 元信息（用于审批弹窗显示 agent 名）
+    let agentStatusCache = {}; // agentId → "online" | "offline"（relay 模式下跟踪 agent 上下线）
     let reconnectAttempts = 0;
     let reconnectTimer = null;
     let lastConnectToken = null; // 自动重连用
@@ -671,6 +672,20 @@
         }
       }
 
+      // agent 上下线状态（relay 模式）
+      if (frame.type === "event" && frame.event === "agent_status") {
+        const { agentId, status } = frame.payload;
+        const prev = agentStatusCache[agentId];
+        agentStatusCache[agentId] = status;
+        // 重新渲染 agent-select 显示状态标记
+        if (agentsCache.length > 0) renderAgentSelect(agentsCache);
+        // 状态变化时系统提示
+        if (prev && prev !== status) {
+          const agentName = agentsCache.find((a) => a.id === agentId)?.name ?? agentId;
+          addSystem(`● ${agentName} ${status === "online" ? "已上线" : "已离线"}`);
+        }
+      }
+
       // 外部 agent 同步事件 —— 用户在终端/IDE 跑外部 CC/Codex 时，输出实时同步到手机
       // payload: { adapterId: "claude-code" | "codex", data: AgentEvent }
       if (frame.type === "event" && frame.event === "external_session_event") {
@@ -777,7 +792,10 @@
       for (const a of agents) {
         const opt = document.createElement("option");
         opt.value = a.id;
-        opt.textContent = a.name;
+        // relay 模式下显示在线/离线标记
+        const status = agentStatusCache[a.id];
+        const marker = status === "online" ? "● " : (status === "offline" ? "○ " : "");
+        opt.textContent = marker + a.name;
         $agentSelect.appendChild(opt);
       }
       updateAgentCaps();

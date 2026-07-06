@@ -75,7 +75,10 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
 
     // /pair 路由：返回注入配对码的 pair.html
     if (url.pathname === "/pair") {
-      const pairUrl = `http://localhost:${port}/?code=${auth.pairingCodeDisplay}`;
+      // 公网 URL 优先用 RELAY_PUBLIC_URL 环境变量（云端 VPS 部署时配置）
+      // fallback 到 localhost:${port}（本地开发用）
+      const publicUrl = process.env.RELAY_PUBLIC_URL ?? `http://localhost:${port}`;
+      const pairUrl = `${publicUrl}/?code=${auth.pairingCodeDisplay}`;
       try {
         const html = await readFile(join(WEB_DIR, "pair.html"), "utf-8");
         const injected = html.replace(
@@ -297,9 +300,20 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
             ...(ok.deviceToken ? { deviceToken: ok.deviceToken } : {}),
           };
           sendResOk(ws, msg.id, payload);
-          // 推送当前所有 agent 状态
+          // 推送当前所有 agent 状态（转成 EventFrame 格式，手机端统一处理）
           for (const notice of store.getAgentStatusNotices()) {
-            send(ws, notice);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "event",
+                event: "agent_status",
+                seq: 0,
+                payload: {
+                  agentId: notice.agentId,
+                  status: notice.status,
+                  lastSeen: notice.lastSeen,
+                },
+              }));
+            }
           }
           return;
         }
@@ -467,13 +481,15 @@ function sendResError(ws: WebSocket, id: string, error: string): void {
 }
 
 function broadcastAgentStatus(mobileWss: WebSocketServer, agentId: string, status: "online" | "offline"): void {
-  const notice = {
-    kind: "agent_status" as const,
-    agentId,
-    status,
-    lastSeen: Date.now(),
+  // 推 EventFrame 格式（手机端统一处理 type:event）
+  // seq=0 表示非 timeline 事件（不持久化，不参与 lastSeq 跟踪）
+  const frame: EventFrame = {
+    type: "event",
+    event: "agent_status",
+    seq: 0,
+    payload: { agentId, status, lastSeen: Date.now() },
   };
-  const data = JSON.stringify(notice);
+  const data = JSON.stringify(frame);
   for (const client of mobileWss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(data);

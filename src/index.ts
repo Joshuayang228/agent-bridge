@@ -2,13 +2,14 @@
  * Agent Bridge 入口
  * 加载 agent 配置 → 启动 Gateway 服务器
  *
- * 环境变量（可选）：
- *   RELAY_URL    —— 云端 relay 的 WS URL，如 ws://relay.example.com:18790/agent
- *   AGENT_TOKEN  —— 连 relay 的鉴权 token（需与 relay 端 RELAY_TOKEN 一致）
- *   AGENT_ID     —— Gateway 标识，默认 hostname-随机
- *   RELAY_MODE   —— start:relay 时启动云端 relay 服务
- *   RELAY_TOKEN  —— relay 模式下的鉴权 token
- *   RELAY_PORT   —— relay 监听端口，默认 18790
+ * 环境变量（可选，可写在 .env 文件里自动加载）：
+ *   RELAY_URL         —— 云端 relay 的 WS URL，如 ws://relay.example.com:18790/agent
+ *   AGENT_TOKEN       —— 连 relay 的鉴权 token（需与 relay 端 RELAY_TOKEN 一致）
+ *   AGENT_ID          —— Gateway 标识，默认 hostname-随机
+ *   RELAY_MODE        —— =relay 时启动云端 relay 服务（也可用 --relay 参数）
+ *   RELAY_TOKEN       —— relay 模式下的鉴权 token
+ *   RELAY_PORT        —— relay 监听端口，默认 18790
+ *   RELAY_PUBLIC_URL  —— relay 公网 URL（用于生成扫码配对 URL，如 https://relay.example.com）
  */
 
 import { ProviderRegistry } from "./providers/registry.js";
@@ -27,6 +28,32 @@ import { startRelayServer } from "./relay/server.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, "..", "agents.config.json");
+const ENV_PATH = join(__dirname, "..", ".env");
+
+/** 简易 .env 加载器：KEY=VALUE 行写入 process.env，跳过注释和空行 */
+function loadEnvFile(): void {
+  if (!existsSync(ENV_PATH)) return;
+  const content = readFileSync(ENV_PATH, "utf-8");
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx <= 0) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    let value = trimmed.slice(eqIdx + 1).trim();
+    // 去掉首尾引号
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    // 不覆盖已存在的环境变量（命令行/系统设置优先）
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+  console.log("[main] 已加载 .env 配置");
+}
+
+loadEnvFile();
 
 async function main() {
   const registry = new ProviderRegistry();
@@ -62,9 +89,10 @@ async function main() {
     cron.start(schedules);
   }
 
-  // 根据模式启动
-  const mode = process.env.RELAY_MODE;
-  if (mode === "relay") {
+  // 根据模式启动（支持命令行 --relay 或环境变量 RELAY_MODE=relay）
+  const args = process.argv.slice(2);
+  const isRelayMode = args.includes("--relay") || process.env.RELAY_MODE === "relay";
+  if (isRelayMode) {
     // 云端 relay 模式
     const relayToken = process.env.RELAY_TOKEN;
     if (!relayToken) {
