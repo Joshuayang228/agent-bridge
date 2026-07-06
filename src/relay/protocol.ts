@@ -36,6 +36,17 @@ export interface AgentRegister {
   };
 }
 
+/**
+ * Gateway → relay：手机请求的响应（res 帧）
+ * 用于手机通过 relay 发 req（如 chat.approve）后，Gateway 处理完把 res 推回 relay 转发给手机。
+ * 不持久化到 SQLite（res 是一次性的，拉历史无意义）。
+ */
+export interface MobileResponse {
+  kind: "mobile_response";
+  /** 原始 res 帧（{type:"res", id, ok, payload}） */
+  response: unknown;
+}
+
 /** 手机端 → relay：拉历史 */
 export interface HistorySinceRequest {
   kind: "history_since";
@@ -100,7 +111,8 @@ export interface StoredTimelineEvent {
 export type RelayClientMessage =
   | AgentRegister
   | AgentEventEnvelope
-  | HistorySinceRequest;
+  | HistorySinceRequest
+  | MobileResponse;
 
 export type RelayServerMessage =
   | AgentRegisterResult

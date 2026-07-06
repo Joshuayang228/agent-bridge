@@ -101,6 +101,9 @@ async function main() {
       onStatusChange: (status, detail) => {
         console.log(`[relay] 状态: ${status}${detail ? ` (${detail})` : ""}`);
       },
+      onMobileRequest: (reqFrame) => {
+        handleMobileRequest(reqFrame, connections, relayClient);
+      },
     });
     connections.setRelayClient(relayClient);
     relayClient.connect();
@@ -108,6 +111,49 @@ async function main() {
   } else {
     console.log("[main] 未配置 RELAY_URL/AGENT_TOKEN，仅 LAN/Tailscale 模式");
   }
+}
+
+/**
+ * 处理通过 relay 转发过来的手机请求（chat.approve / chat.reject / chat.abort）
+ * 把 res 帧推回 relay，relay 转发给在线手机。
+ * chat.send 等复杂请求暂不支持通过 relay 上行（需要 sessionWatcher 等，留待后续）。
+ */
+function handleMobileRequest(
+  reqFrame: unknown,
+  connections: ConnectionManager,
+  relayClient: RelayAgentClient,
+): void {
+  const frame = reqFrame as { type?: string; id?: string; method?: string };
+  if (frame?.type !== "req" || !frame.id || !frame.method) return;
+
+  let resPayload: unknown = null;
+  let ok = true;
+
+  switch (frame.method) {
+    case "chat.approve": {
+      const approved = connections.resolveApproval(true);
+      resPayload = { status: approved ? "approved" : "no-pending" };
+      break;
+    }
+    case "chat.reject": {
+      const rejected = connections.resolveApproval(false);
+      resPayload = { status: rejected ? "rejected" : "no-pending" };
+      break;
+    }
+    case "chat.abort": {
+      const aborted = connections.abortRunning();
+      resPayload = { status: aborted ? "aborted" : "idle" };
+      break;
+    }
+    default:
+      ok = false;
+      resPayload = { code: "unsupported-via-relay", message: `方法 ${frame.method} 暂不支持通过 relay 上行` };
+  }
+
+  const resFrame = ok
+    ? { type: "res", id: frame.id, ok: true, payload: resPayload }
+    : { type: "res", id: frame.id, ok: false, error: resPayload };
+  relayClient.pushResponse(resFrame);
 }
 
 main().catch((err) => {

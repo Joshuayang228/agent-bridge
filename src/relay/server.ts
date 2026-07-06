@@ -198,6 +198,12 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
         return;
       }
 
+      // Gateway → relay：手机请求的响应（res 帧），不持久化，只转发给在线手机
+      if (msg.kind === "mobile_response") {
+        forwardToMobiles(msg.response);
+        return;
+      }
+
       // agent client 不应该发 history_since
       console.warn(`[relay] agent client 发了未识别消息: ${(msg as { kind: string }).kind}`);
     });
@@ -371,6 +377,16 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
     for (const ws of agentSockets.values()) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
+      }
+    }
+  }
+
+  /** 把手机请求的响应转发给所有在线手机（不持久化） */
+  function forwardToMobiles(response: unknown) {
+    const data = JSON.stringify(response);
+    for (const client of mobileWss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
       }
     }
   }

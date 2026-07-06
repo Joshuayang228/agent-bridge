@@ -187,6 +187,18 @@ export class RelayAgentClient {
     this.sendEnvelope(env);
   }
 
+  /**
+   * 推手机请求的响应给 relay（不持久化，只转发给在线手机）
+   * 用于手机通过 relay 发 req 后，Gateway 处理完把 res 推回 relay 转发给手机。
+   */
+  pushResponse(resFrame: unknown): void {
+    if (this.closed) return;
+    if (this.ws?.readyState === WebSocket.OPEN && this.registered) {
+      this.ws.send(JSON.stringify({ kind: "mobile_response", response: resFrame }));
+    }
+    // 未连接/未注册时丢弃（res 是一次性的，不重传）
+  }
+
   private sendEnvelope(env: AgentEventEnvelope) {
     if (this.ws?.readyState === WebSocket.OPEN && this.registered) {
       this.ws.send(JSON.stringify(env));

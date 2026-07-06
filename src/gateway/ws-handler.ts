@@ -26,10 +26,6 @@ import type { SessionWatcher } from "./session-watcher.js";
 interface SessionState {
   authenticated: boolean;
   seq: number;
-  // 当前正在运行的 agent（用于 abort）
-  runningController: AbortController | null;
-  // 待审批的 resolver（手机端 approve/reject 后调用）
-  pendingApproval: ((approved: boolean) => void) | null;
 }
 
 export function createWsHandler(
@@ -43,8 +39,6 @@ export function createWsHandler(
     const state: SessionState = {
       authenticated: false,
       seq: 0,
-      runningController: null,
-      pendingApproval: null,
     };
 
     ws.on("message", async (data: Buffer) => {
@@ -169,34 +163,20 @@ async function handleReq(
     }
 
     case "chat.abort": {
-      if (state.runningController) {
-        state.runningController.abort();
-        send(ws, makeResOk(frame.id, { status: "aborted" }));
-      } else {
-        send(ws, makeResOk(frame.id, { status: "idle" }));
-      }
+      const ok = connections.abortRunning();
+      send(ws, makeResOk(frame.id, { status: ok ? "aborted" : "idle" }));
       break;
     }
 
     case "chat.approve": {
-      if (state.pendingApproval) {
-        state.pendingApproval(true);
-        state.pendingApproval = null;
-        send(ws, makeResOk(frame.id, { status: "approved" }));
-      } else {
-        send(ws, makeResOk(frame.id, { status: "no-pending" }));
-      }
+      const ok = connections.resolveApproval(true);
+      send(ws, makeResOk(frame.id, { status: ok ? "approved" : "no-pending" }));
       break;
     }
 
     case "chat.reject": {
-      if (state.pendingApproval) {
-        state.pendingApproval(false);
-        state.pendingApproval = null;
-        send(ws, makeResOk(frame.id, { status: "rejected" }));
-      } else {
-        send(ws, makeResOk(frame.id, { status: "no-pending" }));
-      }
+      const ok = connections.resolveApproval(false);
+      send(ws, makeResOk(frame.id, { status: ok ? "rejected" : "no-pending" }));
       break;
     }
 
@@ -235,7 +215,7 @@ async function handleChatSend(
 
   // 阶段 2：流式运行 agent
   const controller = new AbortController();
-  state.runningController = controller;
+  connections.setRunningController(controller);
 
   let fullResponse = "";
 
@@ -263,7 +243,7 @@ async function handleChatSend(
       requestApproval: (action, description) => {
         return new Promise<boolean>((resolve) => {
           connections.deliver(ws, makeEvent(state, "agent", { type: "approval_required", action, description }));
-          state.pendingApproval = resolve;
+          connections.setPendingApproval(resolve);
         });
       },
     });
@@ -284,7 +264,8 @@ async function handleChatSend(
     connections.deliver(ws, makeEvent(state, "agent", { type: "error", message }));
   } finally {
     sessionWatcher.resume(adapterId);
-    state.runningController = null;
+    connections.setRunningController(null);
+    connections.setPendingApproval(null);
   }
 }
 

@@ -13,6 +13,11 @@ export class ConnectionManager {
   private connections = new Set<WebSocket>();
   private seq = 0;
   private relayClient: RelayAgentClient | null = null;
+  // 全局审批状态：手机断连重连后，新 ws 也能访问到未决审批
+  // 由 chat.send 的 requestApproval 回调设置，chat.approve/reject 调用 resolve
+  private pendingApproval: ((approved: boolean) => void) | null = null;
+  // 全局运行控制：手机断连重连后能 abort 正在跑的 agent
+  private runningController: AbortController | null = null;
 
   add(ws: WebSocket) {
     this.connections.add(ws);
@@ -22,6 +27,36 @@ export class ConnectionManager {
   /** 注入 relay client（家里 Gateway 启动时连云端 relay） */
   setRelayClient(client: RelayAgentClient | null) {
     this.relayClient = client;
+  }
+
+  /** 设置当前未决审批的 resolver（agent 调 requestApproval 时设） */
+  setPendingApproval(resolver: ((approved: boolean) => void) | null) {
+    this.pendingApproval = resolver;
+  }
+
+  /** 解决审批：手机发 chat.approve/reject 时调用，返回是否成功 */
+  resolveApproval(approved: boolean): boolean {
+    if (!this.pendingApproval) return false;
+    this.pendingApproval(approved);
+    this.pendingApproval = null;
+    return true;
+  }
+
+  get hasPendingApproval(): boolean {
+    return this.pendingApproval !== null;
+  }
+
+  /** 设置当前运行的 AbortController（chat.send 开始时设，结束清空） */
+  setRunningController(controller: AbortController | null) {
+    this.runningController = controller;
+  }
+
+  /** 中止当前运行的 agent，返回是否成功 */
+  abortRunning(): boolean {
+    if (!this.runningController) return false;
+    this.runningController.abort();
+    this.runningController = null;
+    return true;
   }
 
   /** 广播事件到所有已连接客户端（直连手机）+ 推到 relay */
@@ -57,6 +92,11 @@ export class ConnectionManager {
   /** 只推到 relay（不影响直连手机） */
   emitToRelay(eventType: string, eventData: unknown) {
     this.relayClient?.pushEvent(eventType, eventData);
+  }
+
+  /** 推手机请求的响应到 relay（不持久化，只转发给在线手机） */
+  emitResponseToRelay(resFrame: unknown) {
+    this.relayClient?.pushResponse(resFrame);
   }
 
   get count() {
