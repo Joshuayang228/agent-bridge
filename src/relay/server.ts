@@ -11,6 +11,10 @@
  */
 
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { TimelineStore } from "./timeline-store.js";
 import { AuthManager } from "../gateway/auth.js";
@@ -24,6 +28,9 @@ import {
 } from "./protocol.js";
 import type { EventFrame } from "../protocol/frames.js";
 import { PROTOCOL_VERSION, SERVER_NAME } from "../protocol/frames.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = join(__dirname, "..", "..", "web");
 
 export interface RelayServerOptions {
   port?: number;
@@ -58,9 +65,65 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
   // 避免 vitest worker teardown 时 console.log 还在 pending 导致 EnvironmentTeardownError
   let closing = false;
 
-  const httpServer = createServer((_req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end(`${SERVER_NAME} relay\n`);
+  const httpServer = createServer(async (req, res) => {
+    if (!req.url) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    const url = new URL(req.url, `http://localhost:${port}`);
+
+    // /pair 路由：返回注入配对码的 pair.html
+    if (url.pathname === "/pair") {
+      const pairUrl = `http://localhost:${port}/?code=${auth.pairingCodeDisplay}`;
+      try {
+        const html = await readFile(join(WEB_DIR, "pair.html"), "utf-8");
+        const injected = html.replace(
+          "</head>",
+          `  <script>window.__PAIR__ = ${JSON.stringify({ code: auth.pairingCodeDisplay, url: pairUrl, relayMode: true })};</script>\n  </head>`,
+        );
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(injected);
+      } catch {
+        res.writeHead(500);
+        res.end("pair.html not found");
+      }
+      return;
+    }
+
+    let filePath = url.pathname;
+    if (filePath === "/") filePath = "/index.html";
+
+    const fullPath = join(WEB_DIR, filePath);
+    // 防路径穿越
+    if (!fullPath.startsWith(WEB_DIR)) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+    if (!existsSync(fullPath)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    try {
+      const content = await readFile(fullPath);
+      // index.html 注入 relay mode 标志：手机端据此连 /mobile 而不是 /ws
+      if (filePath === "/index.html") {
+        const html = content.toString("utf-8").replace(
+          "</head>",
+          `  <script>window.__RELAY_MODE__ = true;</script>\n  </head>`,
+        );
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": getContentType(filePath) });
+      res.end(content);
+    } catch {
+      res.writeHead(500);
+      res.end("Internal error");
+    }
   });
 
   // 两个 WS endpoint：/agent 给家里 Gateway，/mobile 给手机
@@ -246,6 +309,11 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
         handleHistorySince(ws, msg);
         return;
       }
+      // 兼容 req 格式的 history_since（手机端用 sendReq 发）
+      if (isHistorySinceReqFrame(msg)) {
+        handleHistorySinceReq(ws, msg);
+        return;
+      }
 
       // 其他请求帧透传给 agent client（如果有）
       // 比如手机发 chat.send，需要转发给家里 Gateway
@@ -284,6 +352,16 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
         nextSeq: result.nextSeq,
       });
     }
+  }
+
+  function handleHistorySinceReq(ws: WebSocket, msg: ReqFrameLike) {
+    const params = (msg.params ?? {}) as { since: number; limit?: number; agentId?: string };
+    const result = store.getEventsSince(params.since, params.limit, params.agentId);
+    sendResOk(ws, msg.id, {
+      events: result.events,
+      hasMore: result.hasMore,
+      nextSeq: result.nextSeq,
+    });
   }
 
   function forwardToAgent(reqFrame: unknown) {
@@ -428,6 +506,15 @@ function isHistorySinceReq(msg: unknown): msg is HistorySinceRequest & { id?: st
   );
 }
 
+function isHistorySinceReqFrame(msg: unknown): msg is ReqFrameLike {
+  return (
+    typeof msg === "object" &&
+    msg !== null &&
+    (msg as { type?: string }).type === "req" &&
+    (msg as { method?: string }).method === "history_since"
+  );
+}
+
 // ─── 手机鉴权 ───
 
 function authenticateMobile(
@@ -447,4 +534,15 @@ function authenticateMobile(
     return { ok: false, error: "pair-failed" };
   }
   return { ok: false, error: "not-connected" };
+}
+
+// ─── 静态文件 Content-Type ───
+
+function getContentType(filePath: string): string {
+  if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
+  if (filePath.endsWith(".js")) return "application/javascript; charset=utf-8";
+  if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
+  if (filePath.endsWith(".json")) return "application/json; charset=utf-8";
+  if (filePath.endsWith(".svg")) return "image/svg+xml";
+  return "application/octet-stream";
 }

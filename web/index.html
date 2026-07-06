@@ -404,6 +404,12 @@
     let lastConnectToken = null; // 自动重连用
     let isRunning = false; // agent 是否在跑（控制 abort 按钮）
 
+    // ─── relay 模式：手机连云端 relay 时启用拉历史 ───
+    // relay mode 由页面注入的 window.__RELAY_MODE__ 决定（relay server 返回 index.html 时注入）
+    const isRelayMode = !!window.__RELAY_MODE__;
+    let lastSeq = 0; // 已收到的事件最大 seq（relay 模式下用于断连重连拉增量）
+    let historySince = 0; // 上次发 history_since 的 since 值，用于历史事件去重
+
     const STORAGE_KEY = "agent-bridge-device-token";
     function getDeviceToken() { return localStorage.getItem(STORAGE_KEY) || ""; }
     function saveDeviceToken(token) { localStorage.setItem(STORAGE_KEY, token); }
@@ -432,7 +438,9 @@
       const wasAuthenticated = !!lastConnectToken;
       setStatus(reconnectAttempts > 0 ? "reconnecting" : "disconnected",
                 reconnectAttempts > 0 ? "重连中..." : "连接中...");
-      ws = new WebSocket(`ws://${location.host}/ws`);
+      // relay 模式连 /mobile，gateway 模式连 /ws
+      const wsPath = isRelayMode ? "/mobile" : "/ws";
+      ws = new WebSocket(`ws://${location.host}${wsPath}`);
       ws.onopen = () => sendReq("connect", { protocol: 1, token, pairingCode });
       ws.onclose = (e) => handleDisconnect(e.code, wasAuthenticated);
       ws.onerror = () => {};
@@ -546,6 +554,19 @@
           if ("Notification" in window && Notification.permission === "default") {
             Notification.requestPermission();
           }
+          // relay 模式：记录当前最新 seq，重连后拉 since=lastSeq 的增量
+          if (isRelayMode && typeof payload.latestSeq === "number") {
+            // 首次连接时 lastSeq=0，不拉历史；重连时 lastSeq>0 才拉
+            if (lastSeq > 0 && payload.latestSeq > lastSeq) {
+              fetchHistorySince(lastSeq);
+            }
+          }
+        }
+
+        // history_since 响应：渲染历史事件（payload.events + nextSeq）
+        if (payload?.events !== undefined && payload?.nextSeq !== undefined && payload?.hasMore !== undefined) {
+          renderHistoryBatch(payload.events);
+          lastSeq = Math.max(lastSeq, payload.nextSeq);
         }
 
         if (payload?.sessions !== undefined) renderSessionList(payload.sessions);
@@ -594,6 +615,10 @@
 
       // 流式事件
       if (frame.type === "event" && frame.event === "agent") {
+        // relay 模式：用 relay 分配的 seq 更新 lastSeq（用于断连重连拉增量）
+        if (isRelayMode && typeof frame.seq === "number") {
+          lastSeq = Math.max(lastSeq, frame.seq);
+        }
         const evt = frame.payload;
         if (evt.type === "delta") {
           if (!currentMsgEl) currentMsgEl = addMsg("", "agent");
@@ -925,6 +950,30 @@
         return;
       }
       ws.send(JSON.stringify({ type: "req", id: `${++seq}`, method, params }));
+    }
+
+    // ─── relay 模式：拉历史 ───
+    function fetchHistorySince(since) {
+      historySince = since;
+      sendReq("history_since", { since, limit: 200 });
+    }
+
+    // 渲染历史事件批量——把 StoredTimelineEvent 转成 EventFrame 格式，复用 onMessage 逻辑
+    function renderHistoryBatch(events) {
+      if (!events || events.length === 0) return;
+      addSystem(`📋 补齐断连期间 ${events.length} 条历史`);
+      for (const evt of events) {
+        // 去重：跳过已通过实时事件收到过的（seq <= historySince）
+        if (evt.seq <= historySince) continue;
+        const fakeFrame = {
+          type: "event",
+          event: evt.eventType,
+          seq: evt.seq,
+          payload: evt.eventData,
+        };
+        // 直接调用 onMessage 的核心逻辑——构造一个 MessageEvent
+        onMessage({ data: JSON.stringify(fakeFrame) });
+      }
     }
 
     function getToolMeta(toolStr) {
