@@ -76,9 +76,13 @@ export class SessionManager {
       }));
   }
 
-  /** 获取会话消息历史 */
-  history(sessionId: string): ChatMessage[] {
-    return this.sessions.get(sessionId)?.messages ?? [];
+  /** 获取会话消息历史（支持分页，从最新往前倒着取） */
+  history(sessionId: string, limit?: number, offset?: number): ChatMessage[] {
+    const msgs = this.sessions.get(sessionId)?.messages ?? [];
+    if (!limit) return msgs;
+    const start = Math.max(0, msgs.length - (offset ?? 0) - limit);
+    const end = Math.max(0, msgs.length - (offset ?? 0));
+    return msgs.slice(start, end);
   }
 
   /** 添加用户消息 */

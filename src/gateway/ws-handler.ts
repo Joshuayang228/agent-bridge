@@ -152,8 +152,15 @@ async function handleReq(
     }
 
     case "chat.history": {
-      const params = (frame.params ?? {}) as { sessionId: string };
-      send(ws, makeResOk(frame.id, { messages: sessions.history(params.sessionId) }));
+      const params = (frame.params ?? {}) as { sessionId: string; limit?: number; offset?: number };
+      const all = sessions.history(params.sessionId);
+      if (!params.limit) {
+        send(ws, makeResOk(frame.id, { messages: all, hasMore: false }));
+      } else {
+        const offset = params.offset ?? 0;
+        const messages = sessions.history(params.sessionId, params.limit, offset);
+        send(ws, makeResOk(frame.id, { messages, hasMore: offset + messages.length < all.length }));
+      }
       break;
     }
 

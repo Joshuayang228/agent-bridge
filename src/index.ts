@@ -248,8 +248,15 @@ async function handleMobileRequest(
     }
 
     case "chat.history": {
-      const params = (frame.params ?? {}) as { sessionId: string };
-      res(true, { messages: sessions.history(params.sessionId) });
+      const params = (frame.params ?? {}) as { sessionId: string; limit?: number; offset?: number };
+      const all = sessions.history(params.sessionId);
+      if (!params.limit) {
+        res(true, { messages: all, hasMore: false });
+      } else {
+        const offset = params.offset ?? 0;
+        const messages = sessions.history(params.sessionId, params.limit, offset);
+        res(true, { messages, hasMore: offset + messages.length < all.length });
+      }
       return;
     }
 

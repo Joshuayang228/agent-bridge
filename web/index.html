@@ -623,6 +623,15 @@
       const frame = JSON.parse(ev.data);
       console.log(`[ws] ← ${frame.type}${frame.ok !== undefined ? ` ok=${frame.ok}` : ""}${frame.method ? ` method=${frame.method}` : ""}${frame.event ? ` event=${frame.event}` : ""}`, frame.payload ?? frame.error ?? "");
 
+      if (frame.type === "res") {
+        // 匹配 sendReq 的 Promise resolver
+        if (pendingResolvers.has(frame.id)) {
+          const resolver = pendingResolvers.get(frame.id);
+          pendingResolvers.delete(frame.id);
+          resolver(frame.ok ? frame.payload : null);
+        }
+      }
+
       if (frame.type === "res" && frame.ok) {
         const payload = frame.payload;
 
@@ -669,7 +678,7 @@
           loadSessions();
           closeSidebar();
         }
-        if (payload?.messages !== undefined) renderHistory(payload.messages);
+        if (payload?.messages !== undefined) renderHistory(payload.messages, payload.hasMore);
 
         // chat.send ack → 把 thinking 切换成 cursor
         if (payload?.status === "accepted") {
@@ -1127,16 +1136,67 @@
       currentAgentId = session.agentId;
       renderAgentInfo(agentsCache);
       $messages.innerHTML = "";
-      sendReq("chat.history", { sessionId: session.id });
+      historyOffset = 0;
+      hasMoreHistory = true;
+      // 初始只拉最近 10 条
+      sendReq("chat.history", { sessionId: session.id, limit: 10, offset: 0 });
       loadSessions();
       closeSidebar();
     }
 
-    function renderHistory(messages) {
+    let historyOffset = 0;
+    let hasMoreHistory = true;
+    let loadingHistory = false;
+
+    function renderHistory(messages, hasMore) {
+      hasMoreHistory = hasMore;
+      if (messages.length === 0 && historyOffset === 0) {
+        maybeShowWelcome();
+        return;
+      }
       for (const msg of messages) {
         addMsg(msg.text, msg.role === "assistant" ? "agent" : msg.role);
       }
-      if (messages.length === 0) maybeShowWelcome();
+      // 初始加载滚到底部
+      if (historyOffset === 0) scrollToBottom();
+    }
+
+    /** 下拉加载更多历史消息，插入到顶部，保持滚动位置 */
+    function loadMoreHistory() {
+      if (loadingHistory || !hasMoreHistory || !currentSessionId) return;
+      loadingHistory = true;
+      // 显示加载提示
+      const indicator = document.createElement("div");
+      indicator.id = "load-more-indicator";
+      indicator.style.cssText = "text-align:center;padding:8px;color:#7f8c8d;font-size:12px;";
+      indicator.textContent = "加载中...";
+      $messages.insertBefore(indicator, $messages.firstChild);
+
+      const prevScrollHeight = $messages.scrollHeight;
+      historyOffset += 10;
+
+      sendReq("chat.history", { sessionId: currentSessionId, limit: 10, offset: historyOffset }).then((payload) => {
+        indicator.remove();
+        loadingHistory = false;
+        if (payload?.messages) {
+          hasMoreHistory = payload.hasMore;
+          // 从旧到新插入到顶部
+          for (let i = payload.messages.length - 1; i >= 0; i--) {
+            const msg = payload.messages[i];
+            const el = createMsgEl(msg.text, msg.role === "assistant" ? "agent" : msg.role);
+            $messages.insertBefore(el, $messages.firstChild);
+          }
+          // 保持滚动位置：补偿新增高度
+          const addedHeight = $messages.scrollHeight - prevScrollHeight;
+          $messages.scrollTop += addedHeight;
+          if (!hasMoreHistory) {
+            const end = document.createElement("div");
+            end.style.cssText = "text-align:center;padding:8px;color:#7f8c8d;font-size:11px;";
+            end.textContent = "—— 没有更多了 ——";
+            $messages.insertBefore(end, $messages.firstChild);
+          }
+        }
+      });
     }
 
     // ─── 侧边栏 ───
@@ -1166,12 +1226,24 @@
     }
 
     // ─── 工具函数 ───
+    const pendingResolvers = new Map();
     function sendReq(method, params) {
       if (!ws || ws.readyState !== ws.OPEN) {
         showToast("连接已断开", "error");
-        return;
+        return Promise.resolve(null);
       }
-      ws.send(JSON.stringify({ type: "req", id: `${++seq}`, method, params }));
+      const id = `${++seq}`;
+      return new Promise((resolve) => {
+        pendingResolvers.set(id, resolve);
+        ws.send(JSON.stringify({ type: "req", id, method, params }));
+        // 超时保护
+        setTimeout(() => {
+          if (pendingResolvers.has(id)) {
+            pendingResolvers.delete(id);
+            resolve(null);
+          }
+        }, 5000);
+      });
     }
 
     // ─── relay 模式：拉历史 ───
@@ -1241,9 +1313,7 @@
       hideApproval();
     });
 
-    function addMsg(text, role, agentName) {
-      const welcome = document.getElementById("welcome-card");
-      if (welcome) welcome.remove();
+    function createMsgEl(text, role, agentName) {
       const el = document.createElement("div");
       el.className = `msg ${role}`;
       if (role === "agent") {
@@ -1264,6 +1334,13 @@
       } else {
         el.textContent = text;
       }
+      return el;
+    }
+
+    function addMsg(text, role, agentName) {
+      const welcome = document.getElementById("welcome-card");
+      if (welcome) welcome.remove();
+      const el = createMsgEl(text, role, agentName);
       $messages.appendChild(el);
       scrollToBottom();
       return el;
@@ -1332,6 +1409,13 @@
         $messages.scrollTop = $messages.scrollHeight;
       });
     }
+
+    // 滚动监听：到顶部时加载更多历史
+    $messages.addEventListener("scroll", () => {
+      if ($messages.scrollTop <= 5 && hasMoreHistory && !loadingHistory && currentSessionId) {
+        loadMoreHistory();
+      }
+    });
   </script>
 </body>
 </html>
