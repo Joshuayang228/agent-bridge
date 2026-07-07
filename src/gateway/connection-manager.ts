@@ -56,6 +56,11 @@ export class ConnectionManager {
     return this.pendingApproval !== null;
   }
 
+  /** 是否有 agent 正在运行 */
+  get isRunning(): boolean {
+    return this.runningController !== null;
+  }
+
   /** 设置当前运行的 AbortController（chat.send 开始时设，结束清空） */
   setRunningController(controller: AbortController | null) {
     this.runningController = controller;

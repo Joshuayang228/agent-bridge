@@ -214,6 +214,13 @@ async function handleChatSend(
     return;
   }
 
+  // 运行中保护：同一时间只能跑一个 agent 请求
+  // 用 get 方法而不是直接访问属性，保持封装性
+  if (connections.isRunning) {
+    send(ws, makeResError(frame.id, "busy", "agent 正在运行中，请稍候再试"));
+    return;
+  }
+
   // 存用户消息
   sessions.addUserMessage(params.sessionId, params.message);
 

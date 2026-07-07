@@ -7,10 +7,13 @@
 ## 核心特性
 
 - **手机端 Web App**：浏览器打开即用，零安装、跨平台。扫码配对自动连接。
-- **多 agent 接入**：通过 `AgentProvider` 接口统一抽象，配置驱动挂载多个 agent 引擎。
+- **多 agent 接入**：通过 `AgentProvider` 接口统一抽象，配置驱动挂载多个 agent 引擎（Mock / Claude Code / Codex）。
+- **Relay 云端部署**：支持公网 Relay 中转，手机通过云端 relay 间接连接家中 agent，无需内网穿透。
+- **外部会话同步**：在终端 / IDE 跑的 Claude Code / Codex 会话，输出实时同步到手机侧查看，双向感知。
 - **流式输出**：WebSocket JSON-RPC 推送 `delta` 事件，逐字渲染；OpenAI 兼容 SSE 端点。
 - **能力白名单 + 危险操作审批**：`allowedTools` 限定 agent 可用工具；`dangerousTools` 触发手机端「批准 / 否决」。
-- **多会话管理**：每个 agent 可开多个会话，独立上下文，可切换 / 删除。
+- **多会话管理**：每个 agent 可开多个会话，独立上下文，可切换 / 删除；会话按 agent 分组展示。
+- **历史消息分页**：上滑加载更多历史消息（每次 10 条），支持手动刷新最新消息。
 - **Agent 主动推送**：通过 `schedule` 配置定时触发，agent 可主动给手机发消息。
 - **PWA 支持**：手机可「添加到主屏幕」作为独立 App。
 - **安全设计**：配对码鉴权 + device token + 路径穿越防护 + XSS 防护（DOMPurify）。
@@ -69,12 +72,14 @@ npm start
 
 ### 在 Web App 中
 
-1. **选择 agent**：顶部下拉选择，会显示能力标签（`chat` / `shell` / `files` 等，`shell` 标红）
+1. **当前 agent**：顶部显示当前连接的 agent 名称和图标，右侧刷新按钮可拉取最新消息
 2. **发消息**：底部输入框回车发送，发送后立即显示「思考中」动画
 3. **看流式输出**：agent 回复逐字渲染，支持完整 Markdown（代码高亮 + 表格 + 列表）
 4. **审批弹窗**：agent 调用危险工具时，底部弹出审批条，显示 agent 名 + 操作描述，批准或否决
-5. **多会话**：左上角菜单展开侧边栏，新建 / 切换 / 删除会话
-6. **代码块复制**：hover 代码块右上角「复制」按钮
+5. **多会话**：左上角菜单展开侧边栏，按 agent 分组展示会话，可新建 / 切换 / 删除
+6. **外部会话**：顶部 chip 显示当前正在运行的外部 CC / Codex 会话，点击可查看同步输出
+7. **历史消息**：上滑加载更多历史消息（每次 10 条），也可点刷新按钮拉取最新
+8. **代码块复制**：hover 代码块右上角「复制」按钮
 
 ### 通过 OpenAI 兼容 API
 
@@ -120,6 +125,14 @@ curl -N -X POST http://localhost:18789/v1/chat/completions \
       "capabilities": ["chat", "shell", "files", "tools"],
       "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
       "dangerousTools": ["Bash", "Write", "Edit"]
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "type": "codex",
+      "capabilities": ["chat", "shell", "files", "tools"],
+      "allowedTools": ["read_file", "write_file", "edit_file", "run_command"],
+      "dangerousTools": ["write_file", "edit_file", "run_command"]
     }
   ]
 }
@@ -129,8 +142,8 @@ curl -N -X POST http://localhost:18789/v1/chat/completions \
 |------|------|
 | `id` | 全局唯一标识，用作 OpenAI API 的 `model` 字段 |
 | `name` | 显示名 |
-| `type` | Provider 类型：`mock` / `claude-code` |
-| `capabilities` | 能力标签数组，会显示在 UI 上 |
+| `type` | Provider 类型：`mock` / `claude-code` / `codex` |
+| `capabilities` | 能力标签数组 |
 | `allowedTools` | 传给 agent CLI 的工具白名单（如 Claude Code 的 `--allowedTools`） |
 | `dangerousTools` | `allowedTools` 的子集，调用时触发手机审批 |
 | `schedule` | 可选，定时触发：`{"intervalMs": 60000, "prompt": "..."}` |
@@ -152,7 +165,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 
 - **Node.js + TypeScript**：服务端单进程单端口复用 WS + HTTP + 静态托管
 - **ws**：WebSocket 实现
-- **vitest**：单元测试（32 个测试覆盖 auth / sessions / providers / registry）
+- **vitest**：单元测试（63 个测试覆盖 auth / sessions / providers / registry / relay）
 - **marked + DOMPurify + highlight.js**：前端 Markdown 渲染 + XSS 防护 + 代码高亮
 - **qrcode (esm.sh)**：扫码配对页二维码渲染
 
@@ -161,22 +174,32 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 ```
 .
 ├── src/
-│   ├── index.ts                  # 入口：加载配置 + 启动 Gateway
+│   ├── index.ts                  # 入口：加载配置 + 启动 Gateway / Relay
 │   ├── protocol/
 │   │   └── frames.ts             # 通讯协议帧定义（req/res/event）
 │   ├── providers/
 │   │   ├── types.ts              # AgentProvider 接口 + AgentEvent 类型
 │   │   ├── mock-provider.ts      # Mock agent（流式 + echo + 审批演示）
 │   │   ├── claude-code-provider.ts # Claude Code CLI 接入
+│   │   ├── codex-provider.ts     # Codex CLI 接入
 │   │   └── registry.ts           # 配置驱动的 provider 注册表
-│   └── gateway/
-│       ├── server.ts             # HTTP + WS 单服务器（含 /pair 路由）
-│       ├── auth.ts               # 配对码 + device token 认证
-│       ├── session-manager.ts    # 多会话 CRUD
-│       ├── connection-manager.ts # WS 连接池 + 广播
-│       ├── ws-handler.ts         # WS 协议处理（connect/req/event/approval）
-│       ├── openai-http.ts        # OpenAI 兼容 HTTP/SSE 端点
-│       └── cron-scheduler.ts    # Agent 定时主动触发
+│   ├── gateway/
+│   │   ├── server.ts             # HTTP + WS 单服务器（含 /pair 路由）
+│   │   ├── auth.ts               # 配对码 + device token 认证
+│   │   ├── session-manager.ts    # 多会话 CRUD
+│   │   ├── connection-manager.ts # WS 连接池 + 广播
+│   │   ├── ws-handler.ts         # WS 协议处理（connect/req/event/approval）
+│   │   ├── openai-http.ts        # OpenAI 兼容 HTTP/SSE 端点
+│   │   ├── cron-scheduler.ts     # Agent 定时主动触发
+│   │   ├── session-watcher.ts    # 外部会话文件监听（CC/Codex）
+│   │   └── adapters/             # 外部会话适配器
+│   │       ├── cc-adapter.ts     # Claude Code 会话同步
+│   │       └── codex-adapter.ts  # Codex 会话同步
+│   └── relay/                    # 云端 Relay 中转服务
+│       ├── server.ts             # Relay 服务器
+│       ├── agent-client.ts       # Agent 端 Relay 客户端
+│       ├── protocol.ts           # Relay 协议
+│       └── timeline-store.ts     # 事件时序持久化
 ├── web/
 │   ├── index.html                # Web App（手机端）
 │   ├── pair.html                 # 扫码配对页（主机端展示）
@@ -210,15 +233,35 @@ npm run typecheck  # tsc --noEmit 类型检查
 
 ## 远程访问（外出时用手机连家中 agent）
 
-Gateway 默认绑定 `0.0.0.0`，支持局域网直连。外出时通过内网穿透：
+Gateway 默认绑定 `0.0.0.0`，支持局域网直连。外出时可选以下方式：
 
-**Tailscale（推荐，零配置）**
+**方式一：Relay 云端中转（推荐，零配置）**
+
+家里电脑启动 Gateway 时连接云端 Relay，手机通过云端 Relay 间接访问：
+
+```bash
+# 家里电脑：连接云端 Relay
+RELAY_URL=wss://your-relay-server.com RELAY_TOKEN=your-secret npm start
+
+# 手机：打开 Relay 提供的 Web App 地址，扫码配对即可
+```
+
+Docker 部署 Relay 服务：
+
+```bash
+# 在云服务器上
+git clone https://github.com/Joshuayang228/agent-bridge.git
+cd agent-bridge
+RELAY_TOKEN=your-secret docker-compose up -d
+```
+
+**方式二：Tailscale（零配置局域网）**
 
 1. 家里电脑和手机都装 Tailscale 客户端 + 登录同一账号
 2. 启动 Gateway 后，手机用 Tailscale IP 访问 `http://<tailscale-ip>:18789/pair` 扫码
 3. 配对后手机随时随地都能连回家中 agent
 
-**Cloudflare Tunnel（公网域名）**
+**方式三：Cloudflare Tunnel（公网域名）**
 
 ```bash
 cloudflared tunnel --url http://localhost:18789
@@ -235,8 +278,12 @@ cloudflared tunnel --url http://localhost:18789
 - [x] OpenAI 兼容 HTTP/SSE 端点
 - [x] Agent 定时主动推送
 - [x] 扫码配对 + PWA 支持
+- [x] Claude Code CLI 接入
+- [x] Codex CLI 接入
+- [x] 外部会话实时同步（CC / Codex）
+- [x] Relay 云端中转服务
+- [x] 历史消息分页加载 + 刷新按钮
 - [ ] 接入 my-agent（用户自己的 agent 引擎）
-- [ ] 远程穿透配置文档 + 实测
 - [ ] 工具安全等级表（agent 接入时声明工具等级，Gateway 自动归类）
 
 ## 设计文档

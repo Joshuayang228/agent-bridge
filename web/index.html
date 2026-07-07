@@ -128,12 +128,14 @@
       font-size: 14px; font-weight: 600; color: #eee;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    #agent-caps { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-    .cap-tag {
-      font-size: 10px; padding: 2px 6px; border-radius: 3px;
-      background: #1a1a4e; color: #aab; white-space: nowrap;
+    #refresh-btn {
+      font-size: 18px; background: none; border: none; color: #aab;
+      cursor: pointer; padding: 4px 8px; line-height: 1;
+      border-radius: 6px; transition: all 0.2s;
     }
-    .cap-tag.danger { background: #4a1a1a; color: #ff8b8b; }
+    #refresh-btn:hover { background: #1a1a4e; color: #eee; }
+    #refresh-btn.spinning { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
     /* ─── 消息区 ─── */
     #external-chip {
@@ -416,7 +418,7 @@
       <span class="agent-icon" id="agent-icon">🤖</span>
       <span class="agent-name" id="agent-name">加载中...</span>
     </div>
-    <div id="agent-caps"></div>
+    <button id="refresh-btn" title="刷新最新消息">↻</button>
   </div>
 
   <div id="external-chip">
@@ -452,7 +454,7 @@
     const $status = document.getElementById("status");
     const $agentIcon = document.getElementById("agent-icon");
     const $agentName = document.getElementById("agent-name");
-    const $agentCaps = document.getElementById("agent-caps");
+    const $refreshBtn = document.getElementById("refresh-btn");
     const $newSessionBtn = document.getElementById("new-session-btn");
     const $newSessionDropdown = document.getElementById("new-session-dropdown");
     const $newAgentList = document.getElementById("new-agent-list");
@@ -874,9 +876,12 @@
 
     function sendMessage() {
       const text = $input.value.trim();
-      if (!text || !currentSessionId) {
-        if (!text) return;
-        // 没有会话则先创建
+      if (!text) return;
+      if (isRunning) {
+        showToast("正在运行中，请稍候...", "error");
+        return;
+      }
+      if (!currentSessionId) {
         const agentId = currentAgentId;
         if (!agentId) return;
         sendReq("sessions.create", { agentId, title: text.slice(0, 20) });
@@ -894,11 +899,14 @@
     function doSend(text) {
       addMsg(text, "user");
       $input.value = "";
-      // 立即显示思考中气泡
       currentMsgEl = addThinking();
+      isRunning = true;
+      updateRunningUI();
       const agentId = currentAgentId;
       if (!agentId) {
         showToast("请先选择 agent", "error");
+        isRunning = false;
+        updateRunningUI();
         return;
       }
       sendReq("chat.send", { agentId, message: text, sessionId: currentSessionId });
@@ -920,7 +928,11 @@
       if (a) {
         $agentIcon.textContent = getAgentIcon(a.type);
         $agentName.textContent = a.name;
-        updateAgentCaps();
+        // agent 切换时重新计算外部 session chip
+        if (sessionsCache.length > 0) {
+          const externalSessions = sessionsCache.filter((s) => s.isExternal);
+          updateExternalChip(externalSessions);
+        }
       }
       // 同时渲染新建下拉菜单
       renderNewAgentList(agents);
@@ -960,20 +972,37 @@
       }
     });
 
-    function updateAgentCaps() {
-      const a = agentsCache.find((x) => x.id === currentAgentId);
-      $agentCaps.innerHTML = "";
-      if (!a) return;
-      for (const cap of a.capabilities || []) {
-        const tag = document.createElement("span");
-        tag.className = "cap-tag" + (cap === "shell" ? " danger" : "");
-        tag.textContent = cap;
-        $agentCaps.appendChild(tag);
-      }
-      // agent 切换时重新计算外部 session chip
-      if (sessionsCache.length > 0) {
-        const externalSessions = sessionsCache.filter((s) => s.isExternal);
-        updateExternalChip(externalSessions);
+    // 刷新最新消息：从 relay 拉最新 timeline 事件，追加到当前对话
+    $refreshBtn.addEventListener("click", refreshLatest);
+
+    async function refreshLatest() {
+      if (!currentSessionId) return;
+      $refreshBtn.classList.add("spinning");
+      try {
+        // 重新拉取最近 10 条历史消息，和当前已渲染的对比，追加缺失的新消息
+        const payload = await sendReq("chat.history", { sessionId: currentSessionId, limit: 10, offset: 0 });
+        if (payload?.messages) {
+          const currentTexts = new Set();
+          for (const el of $messages.querySelectorAll(".msg.agent, .msg.user")) {
+            if (el.dataset.raw) currentTexts.add(el.dataset.raw);
+            else if (el.classList.contains("user")) currentTexts.add(el.textContent);
+          }
+          let added = 0;
+          for (const msg of payload.messages) {
+            const text = msg.text || "";
+            if (!currentTexts.has(text) && text.trim()) {
+              addMsg(text, msg.role === "assistant" ? "agent" : msg.role);
+              added++;
+            }
+          }
+          if (added > 0) {
+            showToast(`已刷新，新增 ${added} 条消息`);
+          } else {
+            showToast("已是最新");
+          }
+        }
+      } finally {
+        $refreshBtn.classList.remove("spinning");
       }
     }
 
@@ -1101,7 +1130,13 @@
       currentExternalSession = ext || null;
       if (ext) {
         const agentName = ext.agentId === "codex" ? "Codex" : "CC";
-        $externalChipLabel.textContent = `${agentName} 当前会话${ext.title.includes("(") ? " " + ext.title.match(/\(([^)]+)\)/)?.[1] || "" : ""}`;
+        let label = `${agentName} 当前会话`;
+        const match = ext.title.match(/\(([^)]+)\)/);
+        if (match) {
+          const shortPath = middleEllipsis(match[1], 28);
+          label += ` (${shortPath})`;
+        }
+        $externalChipLabel.textContent = label;
         $externalChip.style.display = "flex";
       } else {
         $externalChip.style.display = "none";
@@ -1138,8 +1173,17 @@
       $messages.innerHTML = "";
       historyOffset = 0;
       hasMoreHistory = true;
-      // 初始只拉最近 10 条
-      sendReq("chat.history", { sessionId: session.id, limit: 10, offset: 0 });
+      // 外部会话直接渲染 recentMessages，不发 chat.history（后端 SessionManager 里没有外部 session）
+      if (session.isExternal && session.recentMessages) {
+        for (const msg of session.recentMessages) {
+          addMsg(msg.text, msg.role === "assistant" ? "agent" : msg.role);
+        }
+        hasMoreHistory = false;
+        scrollToBottom();
+      } else {
+        // 初始只拉最近 10 条
+        sendReq("chat.history", { sessionId: session.id, limit: 10, offset: 0 });
+      }
       loadSessions();
       closeSidebar();
     }
@@ -1215,6 +1259,12 @@
       const div = document.createElement("div");
       div.textContent = String(text ?? "");
       return div.innerHTML;
+    }
+
+    function middleEllipsis(text, maxLen) {
+      if (!text || text.length <= maxLen) return text;
+      const half = Math.floor((maxLen - 1) / 2);
+      return text.slice(0, half) + "…" + text.slice(-half);
     }
 
     // ─── Markdown 渲染 ───
@@ -1402,6 +1452,9 @@
 
     function updateRunningUI() {
       $abortBtn.classList.toggle("visible", isRunning);
+      $sendBtn.disabled = isRunning;
+      $input.disabled = isRunning;
+      $input.style.opacity = isRunning ? "0.5" : "1";
     }
 
     function scrollToBottom() {

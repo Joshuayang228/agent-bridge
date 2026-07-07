@@ -347,6 +347,18 @@ async function handleChatSendViaRelay(
     return;
   }
 
+  // 运行中保护：同一时间只能跑一个 agent 请求
+  if (connections.isRunning) {
+    console.warn(`[relay-up] 拒绝重复请求: agent 正在运行中`);
+    relayClient.pushResponse({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: { code: "busy", message: "agent 正在运行中，请稍候再试" },
+    });
+    return;
+  }
+
   // 存用户消息
   sessions.addUserMessage(sessionId, params.message);
 
