@@ -148,7 +148,6 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
     });
     pairingCode = relay.auth.pairingCodeDisplay;
     connections = new ConnectionManager();
-    connections.setRelayClient(null); // 不连 relay client，直接用 agent client 推事件
   });
 
   afterAll(() => {

@@ -117,37 +117,37 @@ async function main() {
   sessionWatcher.start();
   startServer(registry, auth, sessions, connections, port, sessionWatcher);
 
-  // 如果配置了 RELAY_URL，启动 relay client（家里 Gateway 连云端）
+  // 如果配置了 RELAY_URL，为每个 agent 启动一个 relay client（每个 agent 独立注册到 relay）
   const relayUrl = process.env.RELAY_URL;
   const agentToken = process.env.AGENT_TOKEN;
   if (relayUrl && agentToken) {
     const agents = registry.list();
-    const primaryAgent = agents[0];
-    if (!primaryAgent) {
+    if (agents.length === 0) {
       console.warn("[main] registry 无 agent，跳过 relay client 启动");
     } else {
-      // 用 registry 里的 agent id 注册到 relay（不是 AGENT_ID hostname），
-      // 这样手机端看到的 agent id 和 registry 一致，chat.send 能直接命中
-      const relayAgentId = process.env.AGENT_ID ?? primaryAgent.id;
-      const relayClient = new RelayAgentClient({
-        relayUrl,
-        token: agentToken,
-        agentId: relayAgentId,
-        agentInfo: {
-          name: primaryAgent.name,
-          type: primaryAgent.type,
-          capabilities: primaryAgent.capabilities,
-        },
-        onStatusChange: (status, detail) => {
-          console.log(`[relay] 状态: ${status}${detail ? ` (${detail})` : ""}`);
-        },
-        onMobileRequest: (reqFrame) => {
-          handleMobileRequest(reqFrame, connections, relayClient, registry, sessions, sessionWatcher);
-        },
-      });
-      connections.setRelayClient(relayClient);
-      relayClient.connect();
-      console.log(`[main] relay client 已启动，连接 ${relayUrl} (agentId: ${relayAgentId})`);
+      for (const agent of agents) {
+        const relayAgentId = process.env.AGENT_ID ? `${process.env.AGENT_ID}-${agent.id}` : agent.id;
+        const relayClient = new RelayAgentClient({
+          relayUrl,
+          token: agentToken,
+          agentId: relayAgentId,
+          agentInfo: {
+            name: agent.name,
+            type: agent.type,
+            capabilities: agent.capabilities,
+          },
+          onStatusChange: (status, detail) => {
+            console.log(`[relay:${agent.id}] 状态: ${status}${detail ? ` (${detail})` : ""}`);
+          },
+          onMobileRequest: (reqFrame) => {
+            handleMobileRequest(reqFrame, connections, relayClient, registry, sessions, sessionWatcher);
+          },
+        });
+        connections.addRelayClient(agent.id, relayClient);
+        relayClient.connect();
+        console.log(`[main] relay client 已启动 (agent: ${agent.id}, id: ${relayAgentId})`);
+      }
+      console.log(`[main] 共 ${agents.length} 个 agent 已连接 relay: ${relayUrl}`);
     }
   } else {
     console.log("[main] 未配置 RELAY_URL/AGENT_TOKEN，仅 LAN/Tailscale 模式");

@@ -12,7 +12,7 @@ import type { RelayAgentClient } from "../relay/agent-client.js";
 export class ConnectionManager {
   private connections = new Set<WebSocket>();
   private seq = 0;
-  private relayClient: RelayAgentClient | null = null;
+  private relayClients = new Map<string, RelayAgentClient>();
   // 全局审批状态：手机断连重连后，新 ws 也能访问到未决审批
   // 由 chat.send 的 requestApproval 回调设置，chat.approve/reject 调用 resolve
   private pendingApproval: ((approved: boolean) => void) | null = null;
@@ -24,9 +24,19 @@ export class ConnectionManager {
     ws.on("close", () => this.connections.delete(ws));
   }
 
-  /** 注入 relay client（家里 Gateway 启动时连云端 relay） */
-  setRelayClient(client: RelayAgentClient | null) {
-    this.relayClient = client;
+  /** 注入 relay client（家里 Gateway 启动时连云端 relay），按 agentId 管理多个 */
+  addRelayClient(agentId: string, client: RelayAgentClient) {
+    this.relayClients.set(agentId, client);
+  }
+
+  /** 按 agentId 获取 relay client */
+  getRelayClient(agentId: string): RelayAgentClient | undefined {
+    return this.relayClients.get(agentId);
+  }
+
+  /** 获取所有 relay client（用于广播场景） */
+  getAllRelayClients(): RelayAgentClient[] {
+    return [...this.relayClients.values()];
   }
 
   /** 设置当前未决审批的 resolver（agent 调 requestApproval 时设） */
@@ -89,14 +99,26 @@ export class ConnectionManager {
     this.emitToRelay(frame.event, frame.payload);
   }
 
-  /** 只推到 relay（不影响直连手机） */
-  emitToRelay(eventType: string, eventData: unknown) {
-    this.relayClient?.pushEvent(eventType, eventData);
+  /** 只推到 relay（不影响直连手机）。默认推所有 agent 的 relay，可指定 agentId 只推对应 relay */
+  emitToRelay(eventType: string, eventData: unknown, agentId?: string) {
+    if (agentId) {
+      this.relayClients.get(agentId)?.pushEvent(eventType, eventData);
+    } else {
+      for (const client of this.relayClients.values()) {
+        client.pushEvent(eventType, eventData);
+      }
+    }
   }
 
-  /** 推手机请求的响应到 relay（不持久化，只转发给在线手机） */
-  emitResponseToRelay(resFrame: unknown) {
-    this.relayClient?.pushResponse(resFrame);
+  /** 推手机请求的响应到 relay（不持久化，只转发给在线手机）。指定 agentId 推对应 relay */
+  emitResponseToRelay(resFrame: unknown, agentId?: string) {
+    if (agentId) {
+      this.relayClients.get(agentId)?.pushResponse(resFrame);
+    } else {
+      for (const client of this.relayClients.values()) {
+        client.pushResponse(resFrame);
+      }
+    }
   }
 
   get count() {
@@ -104,6 +126,6 @@ export class ConnectionManager {
   }
 
   get relayOnline(): boolean {
-    return this.relayClient?.isOnline ?? false;
+    return [...this.relayClients.values()].some((c) => c.isOnline);
   }
 }

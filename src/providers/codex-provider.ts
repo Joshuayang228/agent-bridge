@@ -1,48 +1,51 @@
 /**
  * CodexProvider —— 接入 OpenAI Codex CLI
  *
- * 通过 spawn `codex exec "<message>" --json --full-auto` 拿到 JSONL 输出，
- * 用 parseCodexLine（与 CodexAdapter 共用）解析后转成 AgentEvent 流式推送。
+ * 通过 spawn `codex exec "<message>" --json --sandbox workspace-write` 拿到 JSONL 输出，
+ * 解析后转成 AgentEvent 流式推送。
  *
- * 续接用 `codex exec resume <session-id> "<message>" --json --full-auto`，
- * session-id 从首次执行的 session_meta 行 payload.session_id 捕获，存到 SessionManager。
+ * 续接用 `codex exec resume <session-id> "<message>" --json --sandbox workspace-write`，
+ * session-id 从首次执行的 thread.started 行 thread_id 捕获，存到 SessionManager。
  *
  * 工作目录用 `-C <path>` 参数传给 codex（默认用 input.cwd）。
  *
- * 事件映射（详见 codex-adapter.ts 的 parseCodexLine）：
- *   response_item.payload.type === "message"            → delta
- *   response_item.payload.type === "function_call"      → tool_start
- *   response_item.payload.type === "function_call_output" → tool_end
- *   event_msg.payload.type === "agent_message"          → delta
- *   event_msg.payload.type === "task_complete"          → done
- *   event_msg.payload.type === "error"                  → error
+ * codex exec --json 输出格式（实测 v0.142.5）：
+ *   { type: "thread.started", thread_id }                → done 事件的 sessionId
+ *   { type: "turn.started" }                             → 忽略
+ *   { type: "item.completed", item: {
+ *       id, type: "agent_message", text } }              → delta
+ *   { type: "item.started", item: {
+ *       id, type: "command_execution",                   → tool_start
+ *       command, status: "in_progress" } }
+ *   { type: "item.completed", item: {
+ *       id, type: "command_execution",                   → tool_end
+ *       command, aggregated_output, exit_code, status: "completed" } }
+ *   { type: "turn.completed", usage: {...} }             → done
  *
- * 注意：codex --full-auto 模式下工具调用是自动执行的，dangerousTools 审批是
- * post-execution（假审批），与 CC -p 模式同样问题。所以 dangerousTools=[] 时不触发审批，
+ * 注意：codex 的工具调用是自动执行的（--sandbox workspace-write），dangerousTools 审批
+ * 是 post-execution（假审批），与 CC -p 模式同样问题。所以 dangerousTools=[] 时不触发审批，
  * 避免误导用户。要实现真正的 pre-execution 审批需要 codex 的 hook 机制（待研究）。
  */
 
 import { spawn } from "node:child_process";
 import type { AgentConfig, AgentInput, AgentProvider, AgentEvent } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
-import { parseCodexLine } from "../gateway/adapters/codex-adapter.js";
 
-// codex JSONL 行类型（与 codex-adapter.ts 的 CodexLine 保持一致，独立声明避免循环依赖）
-interface CodexLine {
-  timestamp?: string;
+// codex exec --json 输出的行类型
+interface CodexExecLine {
   type: string;
-  payload?: {
+  thread_id?: string;
+  item?: {
+    id?: string;
     type?: string;
-    content?: Array<{ type: string; text?: string }>;
-    name?: string;
-    arguments?: string;
-    call_id?: string;
-    output?: string | object;
-    message?: string;
-    session_id?: string;
-    cwd?: string;
+    // agent_message
+    text?: string;
+    // command_execution
+    command?: string;
+    aggregated_output?: string;
+    exit_code?: number;
+    status?: string;
   };
-  session_id?: string;
 }
 
 export class CodexProvider implements AgentProvider {
@@ -58,24 +61,26 @@ export class CodexProvider implements AgentProvider {
   }
 
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
-    const args = ["exec"];
-
-    // 续接 codex session（input.resumeSessionId 在 index.ts 里由 codexSessionId 传入）
-    if (input.resumeSessionId) {
-      args.push("resume", input.resumeSessionId);
-    }
-
-    args.push(input.message, "--json", "--full-auto");
+    const args = ["exec", "--json", "--sandbox", "workspace-write"];
 
     // 工作目录：续接外部 session 时必须设为该 session 的 cwd，
     // 否则 codex 在 Gateway 当前 cwd 找不到上下文相关文件
     const spawnCwd = input.cwd ?? process.cwd();
     args.push("-C", spawnCwd);
 
-    console.log(`[codex] spawn codex ${args.join(" ")}`);
+    // 续接 codex session（input.resumeSessionId 在 index.ts 里由 codexSessionId 传入）
+    // 注意：resume 子命令必须放在 options 之后、prompt 之前
+    if (input.resumeSessionId) {
+      args.push("resume", input.resumeSessionId);
+    }
+
+    args.push(input.message);
+
+    console.log(`[codex] spawn codex exec ${input.resumeSessionId ? "resume ... " : ""}"${input.message.slice(0, 30)}" (cwd: ${spawnCwd})`);
 
     const child = spawn("codex", args, {
       shell: true,
+      cwd: spawnCwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -89,7 +94,10 @@ export class CodexProvider implements AgentProvider {
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       stderrText += text;
-      console.error(`[codex] stderr: ${text}`);
+      // codex 的 INFO/WARN 日志都走 stderr，只记 debug 级别，不刷屏
+      if (text.includes("ERROR") || text.includes("error")) {
+        console.error(`[codex] stderr: ${text.trim().split("\n")[0]}`);
+      }
     });
 
     child.on("error", (err: Error) => {
@@ -107,32 +115,26 @@ export class CodexProvider implements AgentProvider {
           const trimmed = line.trim();
           if (!trimmed) continue;
 
-          let parsed: CodexLine;
+          let parsed: CodexExecLine;
           try {
-            parsed = JSON.parse(trimmed) as CodexLine;
+            parsed = JSON.parse(trimmed) as CodexExecLine;
           } catch {
             continue;
           }
 
-          // 捕获 session_id（session_meta 行）
-          if (parsed.type === "session_meta") {
-            const sid = parsed.payload?.session_id ?? parsed.session_id;
-            if (sid) {
-              capturedSessionId = sid;
-              console.log(`[codex] 捕获 session_id: ${sid}`);
-            }
+          // 捕获 thread_id（= session_id）
+          if (parsed.type === "thread.started" && parsed.thread_id) {
+            capturedSessionId = parsed.thread_id;
+            console.log(`[codex] 捕获 thread_id: ${capturedSessionId}`);
           }
 
-          const events = parseCodexLine(parsed);
-          for (const evt of events) {
+          for (const evt of this.parseLine(parsed)) {
             if (evt.type === "delta") fullText += evt.text;
             if (evt.type === "done") {
               doneEmitted = true;
-              // 附加 capturedSessionId 到 done 事件（parseCodexLine 的 done 不带 sessionId）
-              if (capturedSessionId && !evt.sessionId) {
-                yield { type: "done", text: evt.text, sessionId: capturedSessionId };
-                continue;
-              }
+              // done 事件用累积的 fullText 作为完整回复文本，附加 sessionId
+              yield { type: "done", text: fullText, sessionId: capturedSessionId };
+              continue;
             }
             if (evt.type === "error") doneEmitted = true;
             yield evt;
@@ -144,20 +146,16 @@ export class CodexProvider implements AgentProvider {
       const trimmed = buffer.trim();
       if (trimmed) {
         try {
-          const parsed = JSON.parse(trimmed) as CodexLine;
-          if (parsed.type === "session_meta") {
-            const sid = parsed.payload?.session_id ?? parsed.session_id;
-            if (sid) capturedSessionId = sid;
+          const parsed = JSON.parse(trimmed) as CodexExecLine;
+          if (parsed.type === "thread.started" && parsed.thread_id) {
+            capturedSessionId = parsed.thread_id;
           }
-          const events = parseCodexLine(parsed);
-          for (const evt of events) {
+          for (const evt of this.parseLine(parsed)) {
             if (evt.type === "delta") fullText += evt.text;
             if (evt.type === "done") {
               doneEmitted = true;
-              if (capturedSessionId && !evt.sessionId) {
-                yield { type: "done", text: evt.text, sessionId: capturedSessionId };
-                continue;
-              }
+              yield { type: "done", text: fullText, sessionId: capturedSessionId };
+              continue;
             }
             if (evt.type === "error") doneEmitted = true;
             yield evt;
@@ -167,7 +165,7 @@ export class CodexProvider implements AgentProvider {
         }
       }
 
-      // 兜底：codex 没发 task_complete 时补 done
+      // 兜底：codex 没发 turn.completed 时补 done
       if (!doneEmitted) {
         if (capturedSessionId) {
           yield { type: "done", text: fullText, sessionId: capturedSessionId };
@@ -177,11 +175,53 @@ export class CodexProvider implements AgentProvider {
         } else if (fullText) {
           yield { type: "done", text: fullText };
         } else {
-          yield { type: "error", message: "codex 无任何输出（确认 @openai/codex 已安装）" };
+          yield { type: "error", message: "codex 无任何输出" };
         }
       }
     } finally {
       child.kill();
     }
+  }
+
+  private parseLine(line: CodexExecLine): AgentEvent[] {
+    const events: AgentEvent[] = [];
+
+    switch (line.type) {
+      case "thread.started":
+        // 只捕获 thread_id，不发事件（由外层处理 sessionId）
+        break;
+
+      case "item.started": {
+        const item = line.item;
+        if (item?.type === "command_execution" && item.command) {
+          const cmdShort = item.command.length > 100 ? item.command.slice(0, 100) + "..." : item.command;
+          events.push({ type: "tool_start", tool: cmdShort });
+        }
+        break;
+      }
+
+      case "item.completed": {
+        const item = line.item;
+        if (!item) break;
+
+        if (item.type === "agent_message" && item.text) {
+          events.push({ type: "delta", text: item.text });
+        } else if (item.type === "command_execution") {
+          const cmdShort = item.command
+            ? (item.command.length > 100 ? item.command.slice(0, 100) + "..." : item.command)
+            : "command_execution";
+          let result = item.aggregated_output ?? "";
+          if (result.length > 200) result = result.slice(0, 200) + "...";
+          events.push({ type: "tool_end", tool: cmdShort, result });
+        }
+        break;
+      }
+
+      case "turn.completed":
+        events.push({ type: "done", text: "" });
+        break;
+    }
+
+    return events;
   }
 }
