@@ -20,6 +20,8 @@ export interface Session {
   updatedAt: number;
   /** 关联的 CC session ID。undefined = 新会话（首条消息不带 --resume），set = 续接该 CC session */
   ccSessionId?: string;
+  /** 关联的 Codex session ID。undefined = 新会话，set = 续接该 Codex session（codex exec resume <id>） */
+  codexSessionId?: string;
 }
 
 export interface SessionSummary {
@@ -30,6 +32,7 @@ export interface SessionSummary {
   createdAt: number;
   updatedAt: number;
   ccSessionId?: string;
+  codexSessionId?: string;
 }
 
 export class SessionManager {
@@ -69,6 +72,7 @@ export class SessionManager {
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
         ccSessionId: s.ccSessionId,
+        codexSessionId: s.codexSessionId,
       }));
   }
 
@@ -107,6 +111,18 @@ export class SessionManager {
   /** 获取会话的 CC session ID */
   getCcSessionId(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.ccSessionId;
+  }
+
+  /** 设置会话关联的 Codex session ID（codex exec 跑完后从输出捕获） */
+  setCodexSessionId(sessionId: string, codexSessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.codexSessionId = codexSessionId;
+  }
+
+  /** 获取会话的 Codex session ID */
+  getCodexSessionId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.codexSessionId;
   }
 
   /** 删除会话 */

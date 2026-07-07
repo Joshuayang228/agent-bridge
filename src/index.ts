@@ -189,22 +189,47 @@ async function handleMobileRequest(
 
     case "sessions.list": {
       const phoneSessions = sessions.list();
-      // 附带当前外部 CC session 的最近消息，让手机端能看到 CC 最近在干什么
+      // 附带当前外部 session（CC + Codex），让手机端能看到 agent 最近在干什么
+      // title 用完整 cwd 路径，方便用户区分不同项目
+      const externalSessions = [];
+
+      // CC 外部 session
       const ccSessionId = sessionWatcher.getCurrentSessionId("claude-code");
       const ccCwd = sessionWatcher.getCurrentCwd("claude-code");
-      const recentMessages = ccSessionId ? sessionWatcher.getRecentMessages("claude-code", 10) : [];
-      const externalSession = ccSessionId ? [{
-        id: `external-${ccSessionId}`,
-        agentId: "claude-code",
-        title: `CC 当前会话${ccCwd ? ` (${ccCwd.split(/[\\/]/).pop()})` : ""}`,
-        messageCount: recentMessages.length,
-        createdAt: 0,
-        updatedAt: Date.now(),
-        ccSessionId: ccSessionId,
-        isExternal: true,
-        recentMessages,
-      }] : [];
-      res(true, { sessions: [...externalSession, ...phoneSessions] });
+      const ccRecent = ccSessionId ? sessionWatcher.getRecentMessages("claude-code", 10) : [];
+      if (ccSessionId) {
+        externalSessions.push({
+          id: `external-${ccSessionId}`,
+          agentId: "claude-code",
+          title: `CC 当前会话${ccCwd ? ` (${ccCwd})` : ""}`,
+          messageCount: ccRecent.length,
+          createdAt: 0,
+          updatedAt: Date.now(),
+          ccSessionId: ccSessionId,
+          isExternal: true,
+          recentMessages: ccRecent,
+        });
+      }
+
+      // Codex 外部 session
+      const codexSessionId = sessionWatcher.getCurrentSessionId("codex");
+      const codexCwd = sessionWatcher.getCurrentCwd("codex");
+      const codexRecent = codexSessionId ? sessionWatcher.getRecentMessages("codex", 10) : [];
+      if (codexSessionId) {
+        externalSessions.push({
+          id: `external-${codexSessionId}`,
+          agentId: "codex",
+          title: `Codex 当前会话${codexCwd ? ` (${codexCwd})` : ""}`,
+          messageCount: codexRecent.length,
+          createdAt: 0,
+          updatedAt: Date.now(),
+          codexSessionId: codexSessionId,
+          isExternal: true,
+          recentMessages: codexRecent,
+        });
+      }
+
+      res(true, { sessions: [...externalSessions, ...phoneSessions] });
       return;
     }
 
@@ -258,6 +283,10 @@ async function handleMobileRequest(
 /**
  * chat.send 通过 relay 上行：立即 ack → 流式 pushEvent → 审批回调
  * 手机发 chat.send → relay 转发 → Gateway 处理 → res(pushResponse) + 事件(pushEvent 持久化)
+ *
+ * 续接逻辑按 provider 类型分支：
+ *   claude-code → getCcSessionId / setCcSessionId（CC --resume）
+ *   codex       → getCodexSessionId / setCodexSessionId（codex exec resume）
  */
 async function handleChatSendViaRelay(
   frame: { id: string; params?: unknown },
@@ -270,21 +299,26 @@ async function handleChatSendViaRelay(
   const params = (frame.params ?? {}) as { agentId: string; message: string; sessionId: string };
   console.log(`[relay-up] chat.send: agent=${params.agentId} session=${params.sessionId} msg="${params.message.slice(0, 50)}"`);
 
-  // 处理外部 CC session：手机选了 "CC 当前会话" 时，sessionId 是 external-{ccSessionId}
-  // 创建一个真实的 SessionManager 会话，设置 ccSessionId，加载最近消息
+  // 处理外部 session：手机选了 "CC/Codex 当前会话" 时，sessionId 是 external-{externalSessionId}
+  // 创建一个真实的 SessionManager 会话，设置对应的 sessionId 字段，加载最近消息
   let sessionId = params.sessionId;
   if (params.sessionId.startsWith("external-")) {
-    const externalCcId = params.sessionId.slice("external-".length);
-    const newSession = sessions.create(params.agentId, "CC 续接会话");
-    sessions.setCcSessionId(newSession.id, externalCcId);
+    const externalId = params.sessionId.slice("external-".length);
+    const newSession = sessions.create(params.agentId, `${params.agentId} 续接会话`);
+    const adapterId = params.agentId === "codex" ? "codex" : "claude-code";
+    if (adapterId === "codex") {
+      sessions.setCodexSessionId(newSession.id, externalId);
+    } else {
+      sessions.setCcSessionId(newSession.id, externalId);
+    }
     // 加载最近消息到会话历史
-    const recent = sessionWatcher.getRecentMessages("claude-code", 10);
+    const recent = sessionWatcher.getRecentMessages(adapterId, 10);
     for (const msg of recent) {
       if (msg.role === "user") sessions.addUserMessage(newSession.id, msg.text);
       else sessions.addAssistantMessage(newSession.id, msg.text);
     }
     sessionId = newSession.id;
-    console.log(`[relay-up] 外部 session 转换: ${params.sessionId} → ${sessionId} (ccSessionId=${externalCcId}, ${recent.length} 条历史)`);
+    console.log(`[relay-up] 外部 session 转换: ${params.sessionId} → ${sessionId} (${adapterId}SessionId=${externalId}, ${recent.length} 条历史)`);
     // 通知手机端 session 已创建
     relayClient.pushResponse({
       type: "res",
@@ -321,15 +355,16 @@ async function handleChatSendViaRelay(
 
   let fullResponse = "";
 
-  // session 续接逻辑：
-  // - 手机会话已有 ccSessionId → 续接该 CC session
-  // - 手机会话没有 ccSessionId（新建会话）→ 不带 --resume，CC 开新 session
-  // - 外部 CC session（SessionWatcher 检测到的）→ 仅用于 cwd，不自动续接
-  const adapterId = provider.info.type;
-  const sessionCcId = sessions.getCcSessionId(sessionId);
-  const resumeSessionId = sessionCcId; // 手机会话关联的 CC session ID
+  // 按 provider 类型选择续接逻辑
+  const adapterId = provider.info.type; // "claude-code" | "codex" | ...
+  let resumeSessionId: string | undefined;
+  if (adapterId === "codex") {
+    resumeSessionId = sessions.getCodexSessionId(sessionId);
+  } else {
+    resumeSessionId = sessions.getCcSessionId(sessionId);
+  }
   const cwd = sessionWatcher.getCurrentCwd(adapterId) ?? undefined;
-  console.log(`[relay-up] session: phone=${sessionId} ccSessionId=${sessionCcId ?? "无(新建)"} cwd=${cwd ?? "无"}`);
+  console.log(`[relay-up] session: phone=${sessionId} ${adapterId}SessionId=${resumeSessionId ?? "无(新建)"} cwd=${cwd ?? "无"}`);
 
   // 暂停 session watcher：provider 写入 session 文件时 watcher 会监听到，
   // 但这些内容 provider 已经通过 stdout 直接推给手机了，不重复推。
@@ -357,10 +392,14 @@ async function handleChatSendViaRelay(
       if (evt.type === "delta") fullResponse += evt.text;
       if (evt.type === "done") {
         if (evt.text) fullResponse = evt.text;
-        // 捕获 CC 返回的 session_id，存到手机会话里（后续消息续接用）
+        // 捕获 agent 返回的 session_id，按类型分别存（后续消息续接用）
         if (evt.sessionId) {
-          console.log(`[relay-up] 捕获 CC session_id: ${evt.sessionId}`);
-          sessions.setCcSessionId(sessionId, evt.sessionId);
+          console.log(`[relay-up] 捕获 ${adapterId} session_id: ${evt.sessionId}`);
+          if (adapterId === "codex") {
+            sessions.setCodexSessionId(sessionId, evt.sessionId);
+          } else {
+            sessions.setCcSessionId(sessionId, evt.sessionId);
+          }
         }
       }
       relayClient.pushEvent("agent", evt);

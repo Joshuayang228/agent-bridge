@@ -11,6 +11,7 @@ import type { AgentConfig, AgentProvider } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
 import { MockProvider } from "./mock-provider.js";
 import { ClaudeCodeProvider } from "./claude-code-provider.js";
+import { CodexProvider } from "./codex-provider.js";
 
 // type → 工厂函数的映射，新增引擎在这里注册
 type ProviderFactory = (config: AgentConfig) => AgentProvider;
@@ -18,6 +19,7 @@ type ProviderFactory = (config: AgentConfig) => AgentProvider;
 const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   mock: (config) => new MockProvider(config),
   "claude-code": (config) => new ClaudeCodeProvider(config),
+  codex: (config) => new CodexProvider(config),
   // 后续扩展：
   // "my-agent": (config) => new MyAgentProvider(config),
   // "openclaw": (config) => new OpenClawProvider(config),

@@ -642,6 +642,8 @@
         } else if (evt.type === "tool_start") {
           if (currentMsgEl) currentMsgEl.classList.remove("cursor");
           addTool(evt.tool, false);
+          // 断开当前气泡，让下一段 delta 创建新气泡（实现 AI→工具→AI 顺序排布）
+          currentMsgEl = null;
         } else if (evt.type === "tool_end") {
           addTool(`${evt.tool} → ${evt.result}`, true);
         } else if (evt.type === "approval_required") {
@@ -698,7 +700,8 @@
 
       // 外部 agent 同步事件 —— 用户在终端/IDE 跑外部 CC/Codex 时，输出实时同步到手机
       // payload: { adapterId: "claude-code" | "codex", data: AgentEvent }
-      // 注意：正在跑 chat.send 时不显示外部事件，避免串台干扰当前对话
+      // 注意1：正在跑 chat.send 时不显示外部事件，避免串台干扰当前对话
+      // 注意2：按当前选中 agent 过滤 —— 选 claude-code 只看 CC 外部事件，选 codex 只看 Codex 外部事件
       if (frame.type === "event" && frame.event === "external_session_event") {
         if (isRunning) {
           // 正在等 agent 响应，跳过外部事件，避免干扰
@@ -707,6 +710,11 @@
         }
         const evt = frame.payload.data;
         const adapterId = frame.payload.adapterId;
+        // 按选中 agent 过滤：adapterId 与当前 agent id 一致才显示
+        if (adapterId !== $agentSelect.value) {
+          console.log(`[ws] 跳过 external_session_event (agent 不匹配) adapterId=${adapterId} selected=${$agentSelect.value}`);
+          return;
+        }
         // 每个 adapter 一条独立气泡
         let msgEl = externalMsgEls.get(adapterId);
         const adapterLabel = adapterId === "codex" ? "Codex (外部)" : "Claude Code (外部)";
@@ -728,6 +736,8 @@
         } else if (evt.type === "tool_start") {
           if (msgEl) msgEl.classList.remove("cursor");
           addTool(`[${adapterLabel}] ${evt.tool}`, false);
+          // 断开当前气泡，让下一段 delta 创建新气泡（实现 AI→工具→AI 顺序排布）
+          externalMsgEls.delete(adapterId);
         } else if (evt.type === "tool_end") {
           addTool(`[${adapterLabel}] ${evt.tool} → ${evt.result}`, true);
         } else if (evt.type === "done") {

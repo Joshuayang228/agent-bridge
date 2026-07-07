@@ -7,6 +7,14 @@
       "capabilities": ["chat", "shell", "files", "tools"],
       "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
       "dangerousTools": []
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "type": "codex",
+      "capabilities": ["chat", "shell", "files", "tools"],
+      "allowedTools": [],
+      "dangerousTools": []
     }
   ]
 }

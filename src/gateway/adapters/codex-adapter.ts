@@ -46,8 +46,16 @@ interface CodexLine {
     output?: string | object;
     // event_msg.agent_message
     message?: string;
+    // session_meta
+    session_id?: string;
+    cwd?: string;
   };
   session_id?: string; // session_meta 里也有
+}
+
+export interface CodexParsedSession {
+  sessionId?: string;
+  cwd?: string;
 }
 
 export class CodexAdapter implements SessionAdapter {
@@ -90,11 +98,14 @@ export class CodexAdapter implements SessionAdapter {
   }
 
   extractSessionId(filePath: string): string | null {
-    // rollout-2026-04-29T08-14-22-a1b2c3d4.jsonl → a1b2c3d4
+    // rollout-2026-07-07T22-14-33-019f3cee-3b74-77f3-99a4-6dd5db97ac26.jsonl
+    //   → 019f3cee-3b74-77f3-99a4-6dd5db97ac26 (完整 UUID，给 codex exec resume 用)
     const basename = filePath.split(/[\\/]/).pop() ?? "";
-    const m = basename.match(/rollout-[\dTZ: +-]+-([a-f0-9]+)\.jsonl$/i);
+    const m = basename.match(
+      /rollout-.+?-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.jsonl$/i,
+    );
     if (m) return m[1];
-    // 退化方案：去掉 .jsonl 后整段返回
+    // 退化方案：去掉 .jsonl 后整段返回（codex CLI 可能也接受完整文件名）
     return basename.replace(/\.jsonl$/, "") || null;
   }
 
@@ -148,52 +159,60 @@ export class CodexAdapter implements SessionAdapter {
   }
 
   parseLine(line: unknown): AgentEvent[] {
-    const obj = line as CodexLine;
-    const events: AgentEvent[] = [];
-    const payload = obj.payload ?? {};
+    return parseCodexLine(line as CodexLine);
+  }
+}
 
-    switch (obj.type) {
-      case "response_item": {
-        if (payload.type === "function_call") {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(payload.arguments || "{}");
-          } catch {
-            // 忽略参数解析失败
-          }
-          const desc = formatToolDesc(payload.name ?? "unknown", args);
-          events.push({ type: "tool_start", tool: `${payload.name}: ${desc}` });
-        } else if (payload.type === "function_call_output") {
-          let result = payload.output ?? "";
-          if (typeof result !== "string") result = JSON.stringify(result);
-          if (result.length > 200) result = result.slice(0, 200) + "...";
-          events.push({ type: "tool_end", tool: payload.call_id ?? "unknown", result });
-        } else if (payload.type === "message" && Array.isArray(payload.content)) {
-          for (const c of payload.content) {
-            if (c.type === "output_text" && c.text) {
-              events.push({ type: "delta", text: c.text });
-            }
+/**
+ * 解析 codex jsonl 一行 → AgentEvent 列表
+ * CodexProvider（主动对话）和 CodexAdapter（外部监听）共用此解析逻辑
+ */
+export function parseCodexLine(line: CodexLine): AgentEvent[] {
+  const obj = line;
+  const events: AgentEvent[] = [];
+  const payload = obj.payload ?? {};
+
+  switch (obj.type) {
+    case "response_item": {
+      if (payload.type === "function_call") {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(payload.arguments || "{}");
+        } catch {
+          // 忽略参数解析失败
+        }
+        const desc = formatToolDesc(payload.name ?? "unknown", args);
+        events.push({ type: "tool_start", tool: `${payload.name}: ${desc}` });
+      } else if (payload.type === "function_call_output") {
+        let result = payload.output ?? "";
+        if (typeof result !== "string") result = JSON.stringify(result);
+        if (result.length > 200) result = result.slice(0, 200) + "...";
+        events.push({ type: "tool_end", tool: payload.call_id ?? "unknown", result });
+      } else if (payload.type === "message" && Array.isArray(payload.content)) {
+        for (const c of payload.content) {
+          if (c.type === "output_text" && c.text) {
+            events.push({ type: "delta", text: c.text });
           }
         }
-        break;
       }
-
-      case "event_msg": {
-        if (payload.type === "agent_message" && payload.message) {
-          events.push({ type: "delta", text: payload.message });
-        } else if (payload.type === "task_complete") {
-          events.push({ type: "done", text: "" });
-        } else if (payload.type === "error") {
-          events.push({ type: "error", message: payload.message ?? "未知错误" });
-        }
-        break;
-      }
-
-      // session_meta / turn_context / compacted 等忽略
+      break;
     }
 
-    return events;
+    case "event_msg": {
+      if (payload.type === "agent_message" && payload.message) {
+        events.push({ type: "delta", text: payload.message });
+      } else if (payload.type === "task_complete") {
+        events.push({ type: "done", text: "" });
+      } else if (payload.type === "error") {
+        events.push({ type: "error", message: payload.message ?? "未知错误" });
+      }
+      break;
+    }
+
+    // session_meta / turn_context / compacted 等忽略
   }
+
+  return events;
 }
 
 function formatToolDesc(name: string, input: Record<string, unknown>): string {
