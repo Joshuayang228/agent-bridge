@@ -4,3 +4,4 @@ _reference/
 *.log
 .env
 .git-commit-msg.txt
+*.tar.gz

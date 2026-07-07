@@ -14,7 +14,7 @@
  *   广播事件统一为 external_session_event，payload 含 { adapterId, data: AgentEvent }
  */
 
-import { watch, type FSWatcher, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { watch, type FSWatcher, existsSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import type { ConnectionManager } from "./connection-manager.js";
 import type { SessionAdapter } from "./session-adapter.js";
 
@@ -118,6 +118,65 @@ export class SessionWatcher {
    */
   suspend(adapterId: string): void {
     this.suspended.add(adapterId);
+  }
+
+  /**
+   * 读取当前 session 文件的最近 N 条 user/assistant 消息
+   * 用于手机连上后推送 CC 最近历史，让用户知道 CC 在干什么
+   */
+  getRecentMessages(adapterId: string, maxMessages = 10): { role: "user" | "assistant"; text: string }[] {
+    const state = this.states.get(adapterId);
+    const adapter = this.adapters.get(adapterId);
+    if (!state?.file || !adapter) return [];
+
+    try {
+      const content = readFileSync(state.file, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
+      const messages: { role: "user" | "assistant"; text: string }[] = [];
+
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          const events = adapter.parseLine(obj);
+          for (const evt of events) {
+            if (evt.type === "delta" && evt.text) {
+              // delta 是 assistant 的流式片段，合并到最后一条 assistant 消息
+              const last = messages[messages.length - 1];
+              if (last && last.role === "assistant") {
+                last.text += evt.text;
+              } else {
+                messages.push({ role: "assistant", text: evt.text });
+              }
+            } else if (evt.type === "done" && evt.text) {
+              // done 是 assistant 的完整回复，替换最后一条 assistant 消息
+              const last = messages[messages.length - 1];
+              if (last && last.role === "assistant") {
+                last.text = evt.text;
+              } else {
+                messages.push({ role: "assistant", text: evt.text });
+              }
+            }
+          }
+          // user message: CC 的 user 行有 message.content[].text
+          if (obj.type === "user" && obj.message?.content) {
+            const text = Array.isArray(obj.message.content)
+              ? obj.message.content.map((c: { text?: string }) => c.text ?? "").join("")
+              : String(obj.message.content);
+            if (text.trim()) {
+              messages.push({ role: "user", text });
+            }
+          }
+        } catch {
+          // 跳过无法解析的行
+        }
+      }
+
+      // 返回最后 N 条
+      return messages.slice(-maxMessages);
+    } catch (err) {
+      console.error(`[session-watcher] [${adapterId}] getRecentMessages 失败:`, err);
+      return [];
+    }
   }
 
   /**

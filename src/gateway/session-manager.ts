@@ -18,6 +18,8 @@ export interface Session {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  /** 关联的 CC session ID。undefined = 新会话（首条消息不带 --resume），set = 续接该 CC session */
+  ccSessionId?: string;
 }
 
 export interface SessionSummary {
@@ -27,6 +29,7 @@ export interface SessionSummary {
   messageCount: number;
   createdAt: number;
   updatedAt: number;
+  ccSessionId?: string;
 }
 
 export class SessionManager {
@@ -65,6 +68,7 @@ export class SessionManager {
         messageCount: s.messages.length,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
+        ccSessionId: s.ccSessionId,
       }));
   }
 
@@ -91,6 +95,18 @@ export class SessionManager {
     if (!session) return;
     session.messages.push({ role: "assistant", text, timestamp: Date.now() });
     session.updatedAt = Date.now();
+  }
+
+  /** 设置会话关联的 CC session ID（首次对话后 CC 返回 session_id 时调用） */
+  setCcSessionId(sessionId: string, ccSessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.ccSessionId = ccSessionId;
+  }
+
+  /** 获取会话的 CC session ID */
+  getCcSessionId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.ccSessionId;
   }
 
   /** 删除会话 */

@@ -441,10 +441,18 @@
                 reconnectAttempts > 0 ? "重连中..." : "连接中...");
       // relay 模式连 /mobile，gateway 模式连 /ws
       const wsPath = isRelayMode ? "/mobile" : "/ws";
-      ws = new WebSocket(`ws://${location.host}${wsPath}`);
-      ws.onopen = () => sendReq("connect", { protocol: 1, token, pairingCode });
-      ws.onclose = (e) => handleDisconnect(e.code, wasAuthenticated);
-      ws.onerror = () => {};
+      const wsUrl = `ws://${location.host}${wsPath}`;
+      console.log(`[ws] 连接 ${wsUrl} relay=${isRelayMode} token=${!!token} code=${!!pairingCode}`);
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        console.log(`[ws] onopen, 发送 connect`);
+        sendReq("connect", { protocol: 1, token, pairingCode });
+      };
+      ws.onclose = (e) => {
+        console.log(`[ws] onclose code=${e.code} reason=${e.reason} wasClean=${e.wasClean}`);
+        handleDisconnect(e.code, wasAuthenticated);
+      };
+      ws.onerror = (e) => console.error(`[ws] onerror`, e);
       ws.onmessage = onMessage;
     }
 
@@ -455,8 +463,8 @@
         currentMsgEl.classList.remove("cursor");
         currentMsgEl = null;
       }
-      // 4001 = 认证失败，不重连
-      if (code === 4001) {
+      // 4001 = Gateway 认证失败，4003 = relay 认证失败，都不重连
+      if (code === 4001 || code === 4003) {
         clearDeviceToken();
         showPairing();
         $pairingError.textContent = "配对码无效，请重新输入";
@@ -496,8 +504,9 @@
       const urlParams = new URLSearchParams(location.search);
       const pairCode = urlParams.get("code");
       const token = getDeviceToken();
-      if (token) connectWithToken(token);
-      else if (pairCode) connectWithPairingCode(pairCode);
+      // URL 带 ?code= 时优先用配对码（避免旧 token 干扰，特别是从本地 Gateway 切到 relay 时）
+      if (pairCode) connectWithPairingCode(pairCode);
+      else if (token) connectWithToken(token);
       else showPairing();
     }
 
@@ -533,6 +542,7 @@
     // ─── 握手响应 ───
     function onMessage(ev) {
       const frame = JSON.parse(ev.data);
+      console.log(`[ws] ← ${frame.type}${frame.ok !== undefined ? ` ok=${frame.ok}` : ""}${frame.method ? ` method=${frame.method}` : ""}${frame.event ? ` event=${frame.event}` : ""}`, frame.payload ?? frame.error ?? "");
 
       if (frame.type === "res" && frame.ok) {
         const payload = frame.payload;
@@ -598,7 +608,7 @@
       }
 
       if (frame.type === "res" && !frame.ok) {
-        if (frame.error?.code === "auth-failed" || frame.error?.code === "pair-failed") {
+        if (frame.error?.code === "auth-failed" || frame.error?.code === "pair-failed" || frame.error?.code === "not-connected") {
           clearDeviceToken();
           showPairing();
           $pairingError.textContent = frame.error?.message || "配对失败";
@@ -688,7 +698,13 @@
 
       // 外部 agent 同步事件 —— 用户在终端/IDE 跑外部 CC/Codex 时，输出实时同步到手机
       // payload: { adapterId: "claude-code" | "codex", data: AgentEvent }
+      // 注意：正在跑 chat.send 时不显示外部事件，避免串台干扰当前对话
       if (frame.type === "event" && frame.event === "external_session_event") {
+        if (isRunning) {
+          // 正在等 agent 响应，跳过外部事件，避免干扰
+          console.log(`[ws] 跳过 external_session_event (isRunning=true) adapterId=${frame.payload.adapterId}`);
+          return;
+        }
         const evt = frame.payload.data;
         const adapterId = frame.payload.adapterId;
         // 每个 adapter 一条独立气泡

@@ -32,6 +32,7 @@ interface CCLine {
   // result 行
   result?: string;
   is_error?: boolean;
+  session_id?: string;
   // stream_event 行（--include-partial-messages 时）
   event?: {
     type: string; // message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop
@@ -264,11 +265,11 @@ export class ClaudeCodeProvider implements AgentProvider {
       }
 
       case "result": {
-        console.log(`[cc] result line: is_error=${line.is_error}, result=${JSON.stringify(line.result)}`);
+        console.log(`[cc] result line: is_error=${line.is_error}, session_id=${line.session_id ?? "无"}, result=${JSON.stringify(line.result)?.slice(0, 100)}`);
         if (line.is_error) {
           events.push({ type: "error", message: line.result ?? "未知错误" });
         } else {
-          events.push({ type: "done", text: line.result ?? "" });
+          events.push({ type: "done", text: line.result ?? "", sessionId: line.session_id });
         }
         break;
       }

@@ -16,9 +16,7 @@ import type { SessionManager } from "./session-manager.js";
 import type { ConnectionManager } from "./connection-manager.js";
 import { createWsHandler } from "./ws-handler.js";
 import { handleOpenAIHttp } from "./openai-http.js";
-import { SessionWatcher } from "./session-watcher.js";
-import { CCAdapter } from "./adapters/cc-adapter.js";
-import { CodexAdapter } from "./adapters/codex-adapter.js";
+import type { SessionWatcher } from "./session-watcher.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(__dirname, "..", "..", "web");
@@ -55,6 +53,7 @@ export function startServer(
   sessions: SessionManager,
   connections: ConnectionManager,
   port = DEFAULT_PORT,
+  sessionWatcher: SessionWatcher,
 ) {
   const httpServer = createServer(async (req, res) => {
     if (!req.url) {
@@ -121,11 +120,6 @@ export function startServer(
   });
 
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
-
-  // 启动外部 session 监听 —— 同时监听 CC 和 Codex 两个 session 源
-  // 用户在终端/IDE 跑外部 agent 时，实时把输出同步到所有已配对手机
-  const sessionWatcher = new SessionWatcher(connections, [new CCAdapter(), new CodexAdapter()]);
-  sessionWatcher.start();
 
   wss.on("connection", createWsHandler(registry, auth, sessions, connections, sessionWatcher));
 

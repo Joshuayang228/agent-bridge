@@ -203,6 +203,9 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
 
       // Gateway → relay：手机请求的响应（res 帧），不持久化，只转发给在线手机
       if (msg.kind === "mobile_response") {
+        const resMethod = (msg.response as { method?: string })?.method ?? "?";
+        const mobileCount = mobileWss.clients.size;
+        console.log(`[relay] agent → mobile_response (${resMethod}) → 转发给 ${mobileCount} 个 mobile`);
         forwardToMobiles(msg.response);
         return;
       }
@@ -232,13 +235,18 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
   });
 
   function handleAgentEvent(_ws: WebSocket, msg: AgentEventEnvelope, agentId: string) {
-    // 持久化
-    const serverSeq = store.insertEvent({
-      agentId,
-      eventType: msg.eventType,
-      eventData: msg.eventData,
-    });
-    // 回 ACK
+    // external_session_event 是外部 agent 的实时输出，不持久化（避免历史污染）
+    // 只转发给在线手机；其他 agent_event 持久化 + 转发
+    const isExternal = msg.eventType === "external_session_event";
+    let serverSeq = 0;
+    if (!isExternal) {
+      serverSeq = store.insertEvent({
+        agentId,
+        eventType: msg.eventType,
+        eventData: msg.eventData,
+      });
+    }
+    // 回 ACK（external_session_event 也回 ACK，让 Gateway 的 pendingAcks 不积压）
     send(_ws, {
       kind: "agent_event_ack",
       clientSeq: msg.clientSeq,
@@ -264,27 +272,39 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
   mobileWss.on("connection", (ws: WebSocket) => {
     let authenticated = false;
     let lastSeq = store.getLatestSeq();
+    console.log(`[relay] mobile 连接建立（当前 mobile 数: ${mobileWss.clients.size}）`);
 
     ws.on("message", (raw) => {
       let msg: unknown;
       try {
         msg = JSON.parse(raw.toString());
       } catch {
+        console.warn(`[relay] mobile 收到无效 JSON`);
         return;
       }
+      const msgSummary = (m: unknown) => {
+        const r = m as { type?: string; method?: string; kind?: string; id?: string };
+        return `${r.type ?? r.kind ?? "?"}/${r.method ?? "?"}/${r.id ?? "?"}`;
+      };
+      console.log(`[relay] mobile 收到消息: ${msgSummary(msg)}${authenticated ? "" : " (未认证)"}`);
 
       // 未认证阶段：接受现有 connect 帧（兼容手机端）或 history_since
       if (!authenticated) {
         // 兼容现有 connect 请求帧
         if (isConnectReq(msg)) {
           const params = msg.params ?? {};
+          const hasToken = !!params.token;
+          const hasCode = !!params.pairingCode;
+          console.log(`[relay] mobile connect 认证: token=${hasToken} code=${hasCode}`);
           const ok = authenticateMobile(params, auth);
           if (!ok.ok) {
+            console.warn(`[relay] mobile 认证失败: ${ok.error}`);
             sendResError(ws, msg.id, ok.error!);
             ws.close(4003, "auth-failed");
             return;
           }
           authenticated = true;
+          console.log(`[relay] mobile 认证成功${ok.deviceToken ? "（新设备 token 已颁发）" : "（token 验证）"}`);
           // 返回 helloOk + 当前 agent 列表 + 当前最新 seq
           const agents = store.listAgents().map((a) => ({
             id: a.id,
@@ -292,6 +312,7 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
             type: a.type,
             capabilities: JSON.parse(a.capabilities) as string[],
           }));
+          console.log(`[relay] mobile connect 返回: agents=${agents.length} latestSeq=${lastSeq}`);
           const payload = {
             protocol: PROTOCOL_VERSION,
             server: SERVER_NAME,
@@ -319,6 +340,7 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
         }
         // 其他未认证消息直接拒绝
         if (isReqFrame(msg)) {
+          console.warn(`[relay] mobile 未认证就发请求: ${(msg as { method?: string }).method}`);
           sendResError(ws, msg.id, "not-connected");
         }
         return;
@@ -326,11 +348,13 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
 
       // 已认证：处理 history_since 或其他请求
       if (isHistorySinceReq(msg)) {
+        console.log(`[relay] mobile 请求 history_since: since=${(msg as { since?: number }).since}`);
         handleHistorySince(ws, msg);
         return;
       }
       // 兼容 req 格式的 history_since（手机端用 sendReq 发）
       if (isHistorySinceReqFrame(msg)) {
+        console.log(`[relay] mobile 请求 history_since(req): since=${(msg as { params?: { since?: number } }).params?.since}`);
         handleHistorySinceReq(ws, msg);
         return;
       }
@@ -338,17 +362,21 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
       // 其他请求帧透传给 agent client（如果有）
       // 比如手机发 chat.send，需要转发给家里 Gateway
       if (isReqFrame(msg)) {
+        const method = (msg as { method?: string }).method;
+        const agentCount = agentSockets.size;
+        console.log(`[relay] mobile 请求 ${method} → 转发给 ${agentCount} 个 agent client`);
         forwardToAgent(msg);
         return;
       }
+      console.warn(`[relay] mobile 收到未识别消息: ${JSON.stringify(msg).slice(0, 200)}`);
     });
 
-    ws.on("close", () => {
-      // 手机断开无需特殊处理，事件继续持久化
+    ws.on("close", (code, reason) => {
+      console.log(`[relay] mobile 断开: code=${code} reason=${reason.toString()}（剩余 mobile: ${mobileWss.clients.size}）`);
     });
 
     ws.on("error", (err) => {
-      console.error(`[relay] mobile socket error:`, err);
+      console.error(`[relay] mobile socket error:`, err.message);
     });
   });
 
@@ -387,22 +415,29 @@ export function startRelayServer(opts: RelayServerOptions): StartedRelay {
   function forwardToAgent(reqFrame: unknown) {
     // 简单策略：广播给所有在线 agent client
     // 后续可以解析 reqFrame.params.agentId 精确路由
+    const method = (reqFrame as { method?: string })?.method ?? "?";
     const data = JSON.stringify(reqFrame);
+    let sent = 0;
     for (const ws of agentSockets.values()) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
+        sent++;
       }
     }
+    console.log(`[relay] forwardToAgent: ${method} → 发给 ${sent}/${agentSockets.size} 个 agent`);
   }
 
   /** 把手机请求的响应转发给所有在线手机（不持久化） */
   function forwardToMobiles(response: unknown) {
     const data = JSON.stringify(response);
+    let sent = 0;
     for (const client of mobileWss.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
+        sent++;
       }
     }
+    console.log(`[relay] forwardToMobiles → 发给 ${sent}/${mobileWss.clients.size} 个 mobile`);
   }
 
   // ─── 定时清理 ───

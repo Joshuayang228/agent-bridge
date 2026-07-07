@@ -38,7 +38,7 @@ export type AgentEvent =
   | { type: "tool_start"; tool: string }
   | { type: "tool_end"; tool: string; result: string }
   | { type: "approval_required"; action: string; description: string }
-  | { type: "done"; text: string }
+  | { type: "done"; text: string; sessionId?: string }
   | { type: "error"; message: string };
 
 // ─── Provider 接口 ───
@@ -61,7 +61,12 @@ export interface AgentConfig {
   capabilities: string[];
   /** 允许执行的工具白名单（不在列表的工具被拒绝） */
   allowedTools?: string[];
-  /** 需要手机审批的危险工具（必须是 allowedTools 的子集） */
+  /**
+   * 需要手机审批的危险工具（必须是 allowedTools 的子集）
+   * 注意：CC 的 -p 模式先执行工具再发 tool_use 事件，审批是 post-execution（假审批）。
+   * 要实现真正的 pre-execution 审批，需用 CC 的 PreToolUse Hook（待实现）。
+   * 当前设为空数组 = 不触发审批，避免误导用户。
+   */
   dangerousTools?: string[];
   config?: Record<string, unknown>;
 }

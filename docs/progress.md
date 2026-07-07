@@ -6,14 +6,15 @@
 
 **自用工具**（2026-07-06 退出 Trae 大赛）：手机遥控家里 agent 的「通道」——agent 跑在电脑上，人在外面用手机指挥、看进度、危险动作远程批准/否决。定位是「揣在兜里的操作员驾驶舱」。
 
-**已落地**：Node.js/TS Gateway + Web App + WS JSON-RPC + 扫码配对 + 多会话 + 能力白名单 + ClaudeCodeProvider + OpenAI 兼容 API + SessionWatcher（CC/Codex 续接）+ **云端 Relay + SQLite 持久化**（断连重连拉历史 + 审批状态全局化 + agent 状态广播）。GitHub: https://github.com/Joshuayang228/agent-bridge
+**已落地**：Node.js/TS Gateway + Web App + WS JSON-RPC + 扫码配对 + 多会话 + 能力白名单 + ClaudeCodeProvider + OpenAI 兼容 API + SessionWatcher（CC/Codex 续接）+ **云端 Relay + SQLite 持久化**（断连重连拉历史 + 审批状态全局化 + agent 状态广播）+ **远程通道端到端打通**（手机 4G → 云端 relay → 家里 Gateway → CC，Q1 去假审批 + Q3 CC 历史推送 + Q4 真新建/续接）。GitHub: https://github.com/Joshuayang228/agent-bridge
 
 **参考教材**：`_reference/openclaw-1/`、`_reference/paseo-main/`（2026-07-06 新增）
 
 **下一步优先级**（自用导向）：
-1. 部署云端 VPS（WSS + 域名 + Caddy 反代）——relay 代码已就绪，待真实环境打磨
-2. 接 my-agent 作为首要下游 Provider
-3. 日常体验打磨（chat.send 通过 relay 上行、推送通知等）
+1. 接 my-agent 作为首要下游 Provider
+2. WSS（Caddy 反代 + Let's Encrypt 证书）+ 域名
+3. 真正 pre-execution 审批（CC PreToolUse Hook）
+4. 日常体验打磨（推送通知、Q2 历史标题同步等）
 
 ---
 
@@ -242,3 +243,47 @@
 - relay → Gateway：`agent_event_ack`（带 serverSeq）+ 透传手机 req 帧
 - relay → 手机：EventFrame（`type:event`），`agent_status` 事件 seq=0
 - 手机 → relay：`history_since` req 拉增量 + `chat.approve`/`reject`/`abort` req 上行
+
+### [2026-07-07] 远程通道端到端打通 + Q1/Q3/Q4 三项体验改进
+
+> 云端 relay 部署到腾讯云 Lighthouse（1.12.224.119:18790），手机经 4G 远程指挥家里 CC 全链路跑通。在此基础上针对用户反馈完成三项体验改进。
+
+**云端部署**：
+- Dockerfile 用阿里云 + npmmirror 镜像加速，构建时间从 1-2 小时降到 2 分钟
+- 腾讯云 Lighthouse 防火墙开 18790 端口，容器健康运行
+- 本地 Gateway `.env` 配 `RELAY_URL` + `AGENT_TOKEN`，启动即连云端
+
+**Q1 去掉假审批**：
+- 根因：CC `-p` 模式先执行工具再发 `tool_use` 事件，`dangerousTools` 审批是 post-execution，"拒绝"只杀进程不阻止当前操作
+- 修复：`agents.config.json` 的 `dangerousTools` 改为 `[]`，`types.ts` 加注释说明假审批机制，避免误导用户
+- 待实现：真正 pre-execution 审批需用 CC 的 PreToolUse Hook
+
+**Q3 推送 CC 最近历史**（手机连上后知道 CC 在干什么）：
+- `SessionWatcher.getRecentMessages(adapterId, maxMessages)`：读 CC session jsonl 文件，解析 user/assistant 消息
+- `sessions.list` 返回当前 CC session（带 `isExternal:true` 标记 + 最近 10 条消息 + ccSessionId）
+- 手机选 "CC 当前会话" 时，`handleChatSendViaRelay` 自动创建真实会话 + 加载历史 + 设置 ccSessionId 续接
+
+**Q4 修复假新建**（之前 sessions.create 只建内存条目，chat.send 总续接同一个 CC session）：
+- `SessionManager` 加 `ccSessionId` 字段 + `setCcSessionId()`/`getCcSessionId()` 方法
+- `handleChatSendViaRelay`：会话有 ccSessionId → 续接（`--resume`）；无 → 新建（不带 `--resume`）
+- `ClaudeCodeProvider.parseLine` 捕获 result 行的 `session_id`，存到 SessionManager（后续消息续接用）
+- `AgentEvent.done` 加 `sessionId?` 字段
+
+**external_session_event 串台修复**：
+- 问题：session-watcher 监听 CC + Codex，所有外部事件都推到 relay 持久化，手机配对后拉历史看到一堆 codex 事件干扰当前对话
+- 修复 1（relay）：`external_session_event` 不持久化到 timeline，只转发给在线手机
+- 修复 2（手机端）：`isRunning=true`（正在等 chat.send 响应）时跳过 external_session_event，避免实时串台
+
+**Agent ID 统一**（之前 home-windows vs claude-code 两套 ID 导致 `agent 未找到`）：
+- Gateway 注册到 relay 时用 `primaryAgent.id`（`claude-code`）而非 `AGENT_ID`（`home-windows`）
+- `.env` 的 `AGENT_ID` 注释掉，默认用 registry 里的 agent id
+- 手机端 `chat.send` 的 `agentId` 能直接 `registry.get()` 命中
+
+**端到端测试**（`scripts/e2e-test.ts` 模拟手机连 relay 跑全流程）：
+1. connect 配对码认证 ✅
+2. sessions.list 返回 CC 当前会话 + 最近消息（Q3）✅
+3. 选 CC 当前会话发消息 → 续接成功（Q3 续接）✅
+4. 新建会话 + 发消息 → CC 开新 session（Q4 新建）✅
+5. 同会话第二条消息 → CC 续接记得上文（Q4 续接）✅
+
+**测试结果**：全流程通过，无串台，CC 续接记忆正常。
