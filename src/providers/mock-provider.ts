@@ -7,6 +7,7 @@
 
 import type { AgentConfig, AgentInput, AgentProvider, AgentEvent } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
+import { randomUUID } from "node:crypto";
 
 const REPLIES = [
   "你好，我是测试机器人，这条消息是逐字流式输出的。",
@@ -43,20 +44,33 @@ export class MockProvider implements AgentProvider {
       yield* streamText("检测到删除操作，需要审批。\n\n");
       yield { type: "delta", text: "" }; // 触发前端渲染
 
-      const approved = input.requestApproval
-        ? await input.requestApproval("rm -rf /tmp/test", "删除临时目录 /tmp/test")
-        : true;
+      const toolId = randomUUID();
+      const toolName = "Bash";
+      const toolInput = { command: "rm -rf /tmp/test" };
+      const description = "删除临时目录 /tmp/test";
 
-      if (approved) {
+      const result = input.requestApproval
+        ? await input.requestApproval({
+            id: toolId,
+            toolName,
+            input: toolInput,
+            description,
+          })
+        : { decision: "approved" as const };
+
+      if (result.decision === "approved" || result.decision === "approved_for_session") {
         yield* streamText("✅ 已批准，执行删除操作...\n");
-        yield { type: "tool_start", tool: "Bash: rm -rf /tmp/test" };
+        yield { type: "tool_start", tool: `Bash: ${toolInput.command}`, toolId, toolName, input: toolInput };
         await delay(500);
-        yield { type: "tool_end", tool: "Bash: rm -rf /tmp/test", result: "已删除 /tmp/test" };
+        yield { type: "tool_end", tool: `Bash: ${toolInput.command}`, result: "已删除 /tmp/test" };
         yield* streamText("删除完成。");
         yield { type: "done", text: "✅ 已批准，执行删除操作...\n删除完成。" };
+      } else if (result.decision === "denied") {
+        yield* streamText(`❌ 已拒绝：${result.reason || "用户拒绝"}`);
+        yield { type: "done", text: `❌ 已拒绝：${result.reason || "用户拒绝"}` };
       } else {
-        yield* streamText("❌ 已拒绝，取消删除操作。");
-        yield { type: "done", text: "❌ 已拒绝，取消删除操作。" };
+        yield* streamText("⏹️ 操作已中止");
+        yield { type: "done", text: "⏹️ 操作已中止" };
       }
       return;
     }

@@ -33,7 +33,24 @@ echo.
 rem === Open browser to /pair after 3s ===
 start /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process 'http://localhost:18789/pair'"
 
-rem === Start server (MUST use npx tsx, NOT npm start / npm run dev) ===
-rem Reason: npm wraps with cmd /c and redirects stdout, causing CC child
-rem         process to inherit invalid fd, triggering EBADF on session write.
+rem === Start server with auto-restart loop ===
+rem Exit code 42 = restart requested from mobile
+rem Any other exit = stop
+:restart_loop
 npx tsx src/index.ts
+set EXIT_CODE=%errorlevel%
+if %EXIT_CODE% equ 42 (
+  echo.
+  echo ============================================
+  echo   Restarting... (exit code 42)
+  echo ============================================
+  echo.
+  goto restart_loop
+)
+
+rem Non-restart exit - pause to show error
+if %EXIT_CODE% neq 0 (
+  echo.
+  echo [Error] Server exited with code %EXIT_CODE%
+  pause
+)

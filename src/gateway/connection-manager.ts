@@ -8,14 +8,22 @@
 import type { WebSocket } from "ws";
 import type { EventFrame } from "../protocol/frames.js";
 import type { RelayAgentClient } from "../relay/agent-client.js";
+import type { ToolApprovalResult } from "../providers/types.js";
+
+/** 待审批请求 */
+interface PendingApproval {
+  resolve: (result: ToolApprovalResult) => void;
+  toolName: string;
+  description: string;
+}
 
 export class ConnectionManager {
   private connections = new Set<WebSocket>();
   private seq = 0;
   private relayClients = new Map<string, RelayAgentClient>();
-  // 全局审批状态：手机断连重连后，新 ws 也能访问到未决审批
-  // 由 chat.send 的 requestApproval 回调设置，chat.approve/reject 调用 resolve
-  private pendingApproval: ((approved: boolean) => void) | null = null;
+  // 待审批请求：toolCallId -> resolver
+  // 支持多个并发审批请求（手机断连重连后也能看到未决审批）
+  private pendingApprovals = new Map<string, PendingApproval>();
   // 全局运行控制：手机断连重连后能 abort 正在跑的 agent
   private runningController: AbortController | null = null;
 
@@ -39,21 +47,37 @@ export class ConnectionManager {
     return [...this.relayClients.values()];
   }
 
-  /** 设置当前未决审批的 resolver（agent 调 requestApproval 时设） */
-  setPendingApproval(resolver: ((approved: boolean) => void) | null) {
-    this.pendingApproval = resolver;
+  /** 添加一个待审批请求，返回 Promise（等手机端批准/否决） */
+  addPendingApproval(
+    id: string,
+    toolName: string,
+    description: string,
+  ): Promise<ToolApprovalResult> {
+    return new Promise<ToolApprovalResult>((resolve) => {
+      this.pendingApprovals.set(id, { resolve, toolName, description });
+    });
   }
 
   /** 解决审批：手机发 chat.approve/reject 时调用，返回是否成功 */
-  resolveApproval(approved: boolean): boolean {
-    if (!this.pendingApproval) return false;
-    this.pendingApproval(approved);
-    this.pendingApproval = null;
+  resolveApproval(id: string, result: ToolApprovalResult): boolean {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending) return false;
+    pending.resolve(result);
+    this.pendingApprovals.delete(id);
     return true;
   }
 
+  /** 获取所有待审批请求（手机重连时用于恢复状态） */
+  getPendingApprovals(): Array<{ id: string; toolName: string; description: string }> {
+    return [...this.pendingApprovals.entries()].map(([id, p]) => ({
+      id,
+      toolName: p.toolName,
+      description: p.description,
+    }));
+  }
+
   get hasPendingApproval(): boolean {
-    return this.pendingApproval !== null;
+    return this.pendingApprovals.size > 0;
   }
 
   /** 是否有 agent 正在运行 */
@@ -70,6 +94,11 @@ export class ConnectionManager {
   abortRunning(): boolean {
     if (!this.runningController) return false;
     this.runningController.abort();
+    // 同时拒绝所有待审批请求
+    for (const [, pending] of this.pendingApprovals) {
+      pending.resolve({ decision: "aborted" });
+    }
+    this.pendingApprovals.clear();
     this.runningController = null;
     return true;
   }

@@ -13,9 +13,9 @@ export interface AgentInput {
   /**
    * 审批回调：Provider 在执行危险操作前调用。
    * Gateway 会推送 approval_required 事件到手机端，
-   * 等手机端批准/否决后 resolve(true/false)。
+   * 等手机端批准/否决后 resolve 审批结果。
    */
-  requestApproval?: (action: string, description: string) => Promise<boolean>;
+  requestApproval?: (request: ToolApprovalRequest) => Promise<ToolApprovalResult>;
   /**
    * 可选：复用外部 CC 的 session —— 续接电脑前跑的对话上下文
    * ClaudeCodeProvider 收到后会加 --resume <id> 参数
@@ -30,14 +30,37 @@ export interface AgentInput {
    * 不传时 provider 回退到 process.cwd()
    */
   cwd?: string;
+
+  /** AbortSignal：手机端中止时触发 */
+  signal?: AbortSignal;
+}
+
+/** 工具审批请求 */
+export interface ToolApprovalRequest {
+  /** 唯一请求 ID（tool_use_id 或随机生成） */
+  id: string;
+  /** 工具名称，如 "Bash"、"Edit"、"Write" */
+  toolName: string;
+  /** 工具参数（结构化） */
+  input: Record<string, unknown>;
+  /** 人类可读的描述 */
+  description: string;
+}
+
+/** 工具审批结果 */
+export interface ToolApprovalResult {
+  /** 审批决定 */
+  decision: "approved" | "approved_for_session" | "denied" | "aborted";
+  /** 拒绝原因（可选） */
+  reason?: string;
 }
 
 // ─── 输出：流式事件（参考 OpenClaw 两阶段模型）───
 export type AgentEvent =
   | { type: "delta"; text: string }
-  | { type: "tool_start"; tool: string }
+  | { type: "tool_start"; tool: string; toolId?: string; toolName?: string; input?: Record<string, unknown> }
   | { type: "tool_end"; tool: string; result: string }
-  | { type: "approval_required"; action: string; description: string }
+  | { type: "approval_required"; id: string; toolName: string; input: Record<string, unknown>; description: string }
   | { type: "done"; text: string; sessionId?: string }
   | { type: "error"; message: string };
 

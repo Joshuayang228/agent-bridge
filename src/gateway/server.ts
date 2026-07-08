@@ -64,6 +64,30 @@ export function startServer(
 
     const url = new URL(req.url, `http://localhost:${port}`);
 
+    // /health 健康检查端点
+    if (url.pathname === "/health") {
+      const uptimeMs = Math.floor(process.uptime() * 1000);
+      const memory = process.memoryUsage();
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          server: "agent-bridge",
+          uptimeMs,
+          startedAt: Date.now() - uptimeMs,
+          agents: registry.list().length,
+          memory: {
+            heapUsed: memory.heapUsed,
+            heapTotal: memory.heapTotal,
+            rss: memory.rss,
+          },
+          connections: connections.count,
+          relayOnline: connections.relayOnline,
+        }),
+      );
+      return;
+    }
+
     // OpenAI 兼容 API 路由
     if (url.pathname.startsWith("/v1/")) {
       const handled = await handleOpenAIHttp(req, res, url, registry, auth);

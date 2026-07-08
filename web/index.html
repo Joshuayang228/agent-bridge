@@ -61,6 +61,26 @@
     .agent-option .opt-icon { font-size: 14px; }
     .agent-option .opt-name { flex: 1; }
     #session-list { flex: 1; overflow-y: auto; padding: 8px; }
+    #system-info {
+      padding: 12px 16px; border-top: 1px solid #1a1a4e;
+      background: #0d0d1a; font-size: 12px;
+    }
+    #system-info .info-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; color: #7f8c8d;
+    }
+    #system-info .info-row:last-child { margin-bottom: 0; }
+    #system-info .info-label { color: #7f8c8d; }
+    #system-info .info-value { color: #aab; font-family: monospace; }
+    #system-info .info-value.online { color: #2ecc71; }
+    #restart-btn {
+      width: 100%; margin-top: 8px;
+      padding: 8px; background: #2c2c54; color: #f39c12;
+      border: 1px solid #3a3a5e; border-radius: 6px;
+      font-size: 12px; cursor: pointer;
+    }
+    #restart-btn:hover { background: #3a3a7e; border-color: #f39c12; }
+    #restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .agent-group { margin-bottom: 12px; }
     .agent-group-header {
       font-size: 11px; color: #7f8c8d; padding: 8px 12px 4px;
@@ -327,6 +347,16 @@
       padding: 6px 8px; background: #1a0d0d; border-radius: 4px;
     }
     #approval-bar .desc { font-size: 12px; color: #bbb; }
+    #approval-bar .approval-options {
+      display: flex; align-items: center; margin: 4px 0;
+    }
+    #approval-bar .approval-checkbox {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: #aab; cursor: pointer;
+    }
+    #approval-bar .approval-checkbox input {
+      width: 14px; height: 14px; cursor: pointer;
+    }
     #approval-bar .btns { display: flex; gap: 10px; }
     #approval-bar .approve {
       flex: 1; padding: 10px; background: #27ae60; color: #fff;
@@ -405,6 +435,21 @@
       </div>
     </div>
     <div id="session-list"></div>
+    <div id="system-info">
+      <div class="info-row">
+        <span class="info-label">运行时间</span>
+        <span class="info-value" id="info-uptime">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">内存使用</span>
+        <span class="info-value" id="info-memory">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">连接设备</span>
+        <span class="info-value" id="info-connections">--</span>
+      </div>
+      <button id="restart-btn">🔄 重启服务</button>
+    </div>
   </div>
 
   <header>
@@ -442,6 +487,12 @@
     </div>
     <div class="action" id="approval-action"></div>
     <div class="desc" id="approval-desc"></div>
+    <div class="approval-options">
+      <label class="approval-checkbox">
+        <input type="checkbox" id="approval-for-session">
+        <span>本次会话始终允许</span>
+      </label>
+    </div>
     <div class="btns">
       <button class="approve" id="approve-btn">✅ 批准</button>
       <button class="reject" id="reject-btn">❌ 否决</button>
@@ -471,6 +522,10 @@
     const $pairingError = document.getElementById("pairing-error");
     const $pairingBtn = document.getElementById("pairing-btn");
     const $toast = document.getElementById("toast");
+    const $infoUptime = document.getElementById("info-uptime");
+    const $infoMemory = document.getElementById("info-memory");
+    const $infoConnections = document.getElementById("info-connections");
+    const $restartBtn = document.getElementById("restart-btn");
 
     let seq = 0;
     let currentMsgEl = null;
@@ -485,6 +540,7 @@
     let reconnectTimer = null;
     let lastConnectToken = null; // 自动重连用
     let isRunning = false; // agent 是否在跑（控制 abort 按钮）
+    let systemInfoTimer = null; // 系统信息轮询定时器
 
     // ─── relay 模式：手机连云端 relay 时启用拉历史 ───
     // relay mode 由页面注入的 window.__RELAY_MODE__ 决定（relay server 返回 index.html 时注入）
@@ -540,6 +596,7 @@
     function handleDisconnect(code, wasAuthenticated) {
       isRunning = false;
       updateRunningUI();
+      stopSystemInfoPolling();
       if (currentMsgEl) {
         currentMsgEl.classList.remove("cursor");
         currentMsgEl = null;
@@ -652,6 +709,7 @@
           renderAgentInfo(payload.agents);
           addSystem(`已连接，${payload.agents.length} 个 agent 可用`);
           loadSessions();
+          startSystemInfoPolling();
           if ("Notification" in window && Notification.permission === "default") {
             Notification.requestPermission();
           }
@@ -737,7 +795,7 @@
         } else if (evt.type === "tool_end") {
           addTool(`${evt.tool} → ${evt.result}`, true);
         } else if (evt.type === "approval_required") {
-          showApproval(evt.action, evt.description);
+          showApproval(evt);
         } else if (evt.type === "done") {
           if (currentMsgEl) {
             currentMsgEl.innerHTML = renderMarkdown(evt.text);
@@ -1342,24 +1400,51 @@
       scrollToBottom();
     }
 
-    function showApproval(action, description) {
+    let currentApprovalId = null;
+
+    function showApproval(evt) {
       const $bar = document.getElementById("approval-bar");
       const agentName = agentsCache.find((a) => a.id === currentAgentId)?.name || "未知 agent";
       document.getElementById("approval-agent").textContent = agentName;
-      document.getElementById("approval-action").textContent = `$ ${action}`;
-      document.getElementById("approval-desc").textContent = description;
+      const toolName = evt.toolName || "未知工具";
+      let actionText = toolName;
+      if (evt.input) {
+        if (evt.input.command) {
+          actionText = `$ ${evt.input.command}`;
+        } else if (evt.input.file_path) {
+          actionText = `${toolName}: ${evt.input.file_path}`;
+        } else {
+          actionText = `${toolName}: ${JSON.stringify(evt.input).slice(0, 100)}`;
+        }
+      } else if (evt.description) {
+        actionText = evt.description;
+      }
+      document.getElementById("approval-action").textContent = actionText;
+      document.getElementById("approval-desc").textContent = evt.description || toolName;
+      document.getElementById("approval-for-session").checked = false;
+      currentApprovalId = evt.id || null;
       $bar.classList.add("active");
       showToast("⚠️ 待审批操作", "error");
     }
+
     function hideApproval() {
       document.getElementById("approval-bar").classList.remove("active");
+      currentApprovalId = null;
     }
+
     document.getElementById("approve-btn").addEventListener("click", () => {
-      sendReq("chat.approve", {});
+      const forSession = document.getElementById("approval-for-session").checked;
+      const params = {};
+      if (currentApprovalId) params.id = currentApprovalId;
+      if (forSession) params.forSession = true;
+      sendReq("chat.approve", params);
       hideApproval();
     });
+
     document.getElementById("reject-btn").addEventListener("click", () => {
-      sendReq("chat.reject", {});
+      const params = {};
+      if (currentApprovalId) params.id = currentApprovalId;
+      sendReq("chat.reject", params);
       hideApproval();
     });
 
@@ -1468,6 +1553,69 @@
       if ($messages.scrollTop <= 5 && hasMoreHistory && !loadingHistory && currentSessionId) {
         loadMoreHistory();
       }
+    });
+
+    // ─── 系统信息 & 重启 ───
+    function formatUptime(ms) {
+      const seconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const days = Math.floor(hours / 24);
+      if (days > 0) return `${days}天${hours % 24}时`;
+      if (hours > 0) return `${hours}时${minutes % 60}分`;
+      if (minutes > 0) return `${minutes}分${seconds % 60}秒`;
+      return `${seconds}秒`;
+    }
+
+    function formatMemory(bytes) {
+      const mb = bytes / (1024 * 1024);
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+      return mb.toFixed(0) + " MB";
+    }
+
+    async function fetchSystemInfo() {
+      try {
+        const info = await sendReq("system.info", {});
+        if (info) {
+          $infoUptime.textContent = formatUptime(info.uptimeMs);
+          $infoMemory.textContent = formatMemory(info.memory?.heapUsed ?? 0);
+          $infoConnections.textContent = info.connections ?? 0;
+          $restartBtn.disabled = false;
+        }
+      } catch (e) {
+        console.error("[system] 获取系统信息失败", e);
+      }
+    }
+
+    function startSystemInfoPolling() {
+      stopSystemInfoPolling();
+      fetchSystemInfo();
+      systemInfoTimer = setInterval(fetchSystemInfo, 15000);
+    }
+
+    function stopSystemInfoPolling() {
+      if (systemInfoTimer) {
+        clearInterval(systemInfoTimer);
+        systemInfoTimer = null;
+      }
+      $infoUptime.textContent = "--";
+      $infoMemory.textContent = "--";
+      $infoConnections.textContent = "--";
+      $restartBtn.disabled = true;
+    }
+
+    $restartBtn.addEventListener("click", () => {
+      if (!confirm("确定要重启服务吗？\n服务会立即重启，大约需要几秒钟。")) return;
+      $restartBtn.disabled = true;
+      $restartBtn.textContent = "重启中...";
+      sendReq("system.restart", {}).then(() => {
+        showToast("服务正在重启...", "success");
+        addSystem("🔄 服务重启中，预计几秒钟后恢复...");
+      }).catch(() => {
+        showToast("重启请求发送失败", "error");
+        $restartBtn.disabled = false;
+        $restartBtn.textContent = "🔄 重启服务";
+      });
     });
   </script>
 </body>

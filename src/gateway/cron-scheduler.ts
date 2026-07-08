@@ -50,7 +50,7 @@ export class CronScheduler {
         sessionId: `cron-${Date.now()}`,
         agentId: s.agentId,
         message: s.prompt ?? "主动打个招呼，简短地说一句",
-        requestApproval: async () => true,
+        requestApproval: async () => ({ decision: "approved" as const }),
       });
 
       let fullText = "";

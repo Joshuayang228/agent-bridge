@@ -167,10 +167,10 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
   it("手机断连期间产生审批请求，重连后拉历史看到并批准", async () => {
     // 1. agent client 连 relay，设置 onMobileRequest 处理 chat.approve
     let approvalResolved = false;
-    let approvalResult = false;
-    connections.setPendingApproval((approved: boolean) => {
+    let approvalResult = "approved";
+    connections.addPendingApproval("test-approval-1", "Bash", "删除测试目录").then((result) => {
       approvalResolved = true;
-      approvalResult = approved;
+      approvalResult = result.decision;
     });
 
     const agent = new RelayAgentClient({
@@ -179,15 +179,29 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
       agentId: "approval-agent",
       agentInfo: { name: "Approval Agent", type: "claude-code", capabilities: ["shell"] },
       onMobileRequest: (reqFrame) => {
-        const frame = reqFrame as { type?: string; id?: string; method?: string };
+        const frame = reqFrame as { type?: string; id?: string; method?: string; params?: any };
         if (frame?.type === "req" && frame.method === "chat.approve") {
-          const ok = connections.resolveApproval(true);
-          agent.pushResponse({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: { status: ok ? "approved" : "no-pending" },
-          });
+          const params = frame.params ?? {};
+          const pending = connections.getPendingApprovals();
+          const approvalId = params.id ?? (pending.length > 0 ? pending[0].id : undefined);
+          if (approvalId) {
+            const ok = connections.resolveApproval(approvalId, {
+              decision: params.forSession ? "approved_for_session" : "approved",
+            });
+            agent.pushResponse({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { status: ok ? "approved" : "no-pending" },
+            });
+          } else {
+            agent.pushResponse({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { status: "no-pending" },
+            });
+          }
         }
       },
     });
@@ -209,7 +223,9 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
     // 4. agent 推 approval_required 事件（断连期间产生，持久化到 relay）
     agent.pushEvent("agent", {
       type: "approval_required",
-      action: "rm -rf /tmp/test",
+      id: "test-approval-1",
+      toolName: "Bash",
+      input: { command: "rm -rf /tmp/test" },
       description: "删除测试目录",
     });
     await waitFor(() => (agent.pendingCount === 0 ? true : null), 3000);
@@ -230,7 +246,7 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
       (e: any) => e.eventData?.type === "approval_required",
     );
     expect(approvalHistory).toBeDefined();
-    expect(approvalHistory.eventData.action).toBe("rm -rf /tmp/test");
+    expect(approvalHistory.eventData.toolName).toBe("Bash");
 
     // 6. mobile2 发 chat.approve（通过 relay 上行到 Gateway）
     const approveRes = await mobile2.sendReq("chat.approve", {});
@@ -241,13 +257,12 @@ describe("审批状态持久化 + 请求上行 端到端", () => {
     // 7. 验证 connections.resolveApproval 被调用
     await waitFor(() => (approvalResolved ? true : null), 1000);
     expect(approvalResolved).toBe(true);
-    expect(approvalResult).toBe(true);
+    expect(approvalResult).toBe("approved");
   });
 
   it("无未决审批时 resolveApproval 返回 false", async () => {
-    connections.setPendingApproval(null);
-    expect(connections.resolveApproval(true)).toBe(false);
-    expect(connections.resolveApproval(false)).toBe(false);
+    expect(connections.resolveApproval("nonexistent", { decision: "approved" })).toBe(false);
+    expect(connections.resolveApproval("nonexistent", { decision: "denied" })).toBe(false);
   });
 
   it("abortRunning 全局生效", async () => {

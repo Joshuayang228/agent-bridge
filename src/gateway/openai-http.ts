@@ -92,7 +92,7 @@ export async function handleOpenAIHttp(
           sessionId: `http-${completionId}`,
           agentId: model,
           message: lastUser.content,
-          requestApproval: async () => true,
+          requestApproval: async () => ({ decision: "approved" as const }),
         });
 
         for await (const evt of events) {
@@ -140,7 +140,7 @@ export async function handleOpenAIHttp(
         sessionId: `http-${completionId}`,
         agentId: model,
         message: lastUser.content,
-        requestApproval: async () => true,
+        requestApproval: async () => ({ decision: "approved" as const }),
       });
 
       let fullText = "";

@@ -28,7 +28,8 @@
  */
 
 import { spawn } from "node:child_process";
-import type { AgentConfig, AgentInput, AgentProvider, AgentEvent } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { AgentConfig, AgentInput, AgentProvider, AgentEvent, ToolApprovalResult } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
 
 // codex exec --json 输出的行类型
@@ -50,6 +51,9 @@ interface CodexExecLine {
 
 export class CodexProvider implements AgentProvider {
   readonly info: AgentInfo;
+  private dangerousTools: Set<string>;
+  // 会话级已批准的工具
+  private sessionApprovedTools = new Set<string>();
 
   constructor(config: AgentConfig) {
     this.info = {
@@ -58,6 +62,7 @@ export class CodexProvider implements AgentProvider {
       type: config.type,
       capabilities: config.capabilities,
     };
+    this.dangerousTools = new Set(config.dangerousTools ?? []);
   }
 
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
@@ -129,15 +134,47 @@ export class CodexProvider implements AgentProvider {
           }
 
           for (const evt of this.parseLine(parsed)) {
-            if (evt.type === "delta") fullText += evt.text;
-            if (evt.type === "done") {
-              doneEmitted = true;
-              // done 事件用累积的 fullText 作为完整回复文本，附加 sessionId
-              yield { type: "done", text: fullText, sessionId: capturedSessionId };
-              continue;
+            if (evt.type === "tool_start" && evt.toolName && this.isDangerous(evt.toolName)) {
+              // 会话级白名单
+              if (this.sessionApprovedTools.has(evt.toolName)) {
+                yield evt;
+                continue;
+              }
+              yield evt;
+              let result: ToolApprovalResult;
+              if (input.requestApproval && evt.toolName && evt.input) {
+                result = await input.requestApproval({
+                  id: evt.toolId ?? randomUUID(),
+                  toolName: evt.toolName,
+                  input: evt.input,
+                  description: evt.tool,
+                });
+              } else {
+                result = { decision: "approved" };
+              }
+              if (result.decision === "approved" || result.decision === "approved_for_session") {
+                if (result.decision === "approved_for_session") {
+                  this.sessionApprovedTools.add(evt.toolName);
+                }
+              } else if (result.decision === "denied") {
+                child.kill();
+                yield { type: "error", message: result.reason || `用户拒绝了工具调用：${evt.toolName}` };
+                return;
+              } else if (result.decision === "aborted") {
+                child.kill();
+                yield { type: "error", message: "操作已中止" };
+                return;
+              }
+            } else {
+              if (evt.type === "delta") fullText += evt.text;
+              if (evt.type === "done") {
+                doneEmitted = true;
+                yield { type: "done", text: fullText, sessionId: capturedSessionId };
+                continue;
+              }
+              if (evt.type === "error") doneEmitted = true;
+              yield evt;
             }
-            if (evt.type === "error") doneEmitted = true;
-            yield evt;
           }
         }
       }
@@ -151,14 +188,46 @@ export class CodexProvider implements AgentProvider {
             capturedSessionId = parsed.thread_id;
           }
           for (const evt of this.parseLine(parsed)) {
-            if (evt.type === "delta") fullText += evt.text;
-            if (evt.type === "done") {
-              doneEmitted = true;
-              yield { type: "done", text: fullText, sessionId: capturedSessionId };
-              continue;
+            if (evt.type === "tool_start" && evt.toolName && this.isDangerous(evt.toolName)) {
+              if (this.sessionApprovedTools.has(evt.toolName)) {
+                yield evt;
+                continue;
+              }
+              yield evt;
+              let result: ToolApprovalResult;
+              if (input.requestApproval && evt.toolName && evt.input) {
+                result = await input.requestApproval({
+                  id: evt.toolId ?? randomUUID(),
+                  toolName: evt.toolName,
+                  input: evt.input,
+                  description: evt.tool,
+                });
+              } else {
+                result = { decision: "approved" };
+              }
+              if (result.decision === "approved" || result.decision === "approved_for_session") {
+                if (result.decision === "approved_for_session") {
+                  this.sessionApprovedTools.add(evt.toolName);
+                }
+              } else if (result.decision === "denied") {
+                child.kill();
+                yield { type: "error", message: result.reason || `用户拒绝了工具调用：${evt.toolName}` };
+                return;
+              } else if (result.decision === "aborted") {
+                child.kill();
+                yield { type: "error", message: "操作已中止" };
+                return;
+              }
+            } else {
+              if (evt.type === "delta") fullText += evt.text;
+              if (evt.type === "done") {
+                doneEmitted = true;
+                yield { type: "done", text: fullText, sessionId: capturedSessionId };
+                continue;
+              }
+              if (evt.type === "error") doneEmitted = true;
+              yield evt;
             }
-            if (evt.type === "error") doneEmitted = true;
-            yield evt;
           }
         } catch {
           // 忽略
@@ -195,7 +264,13 @@ export class CodexProvider implements AgentProvider {
         const item = line.item;
         if (item?.type === "command_execution" && item.command) {
           const cmdShort = item.command.length > 100 ? item.command.slice(0, 100) + "..." : item.command;
-          events.push({ type: "tool_start", tool: cmdShort });
+          events.push({
+            type: "tool_start",
+            tool: cmdShort,
+            toolId: item.id,
+            toolName: "Bash",
+            input: { command: item.command },
+          });
         }
         break;
       }
@@ -223,5 +298,10 @@ export class CodexProvider implements AgentProvider {
     }
 
     return events;
+  }
+
+  /** 检查工具是否危险 */
+  private isDangerous(toolName: string): boolean {
+    return this.dangerousTools.has(toolName);
   }
 }

@@ -7,7 +7,7 @@ function makeInput(message: string, requestApproval?: AgentInput["requestApprova
     sessionId: "test-session",
     agentId: "mock",
     message,
-    requestApproval: requestApproval ?? (async () => true),
+    requestApproval: requestApproval ?? (async () => ({ decision: "approved" as const })),
   };
 }
 
@@ -89,7 +89,7 @@ describe("MockProvider", () => {
     for await (const evt of provider.send(
       makeInput("帮我删除文件", async () => {
         approvalCalled = true;
-        return true;
+        return { decision: "approved" as const };
       }),
     )) {
       events.push(evt);

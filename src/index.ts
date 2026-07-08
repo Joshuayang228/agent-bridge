@@ -261,20 +261,74 @@ async function handleMobileRequest(
     }
 
     case "chat.approve": {
-      const approved = connections.resolveApproval(true);
-      res(true, { status: approved ? "approved" : "no-pending" });
+      const params = ((frame.params ?? {}) as Record<string, unknown>) as { id?: string; forSession?: boolean };
+      let approvalId = params.id;
+      if (!approvalId) {
+        const pending = connections.getPendingApprovals();
+        if (pending.length > 0) approvalId = pending[0].id;
+      }
+      if (!approvalId) {
+        res(true, { status: "no-pending" });
+        return;
+      }
+      const result = {
+        decision: params.forSession ? "approved_for_session" : "approved",
+      } as const;
+      const ok = connections.resolveApproval(approvalId, result);
+      res(true, { status: ok ? "approved" : "no-pending" });
       return;
     }
 
     case "chat.reject": {
-      const rejected = connections.resolveApproval(false);
-      res(true, { status: rejected ? "rejected" : "no-pending" });
+      const params = ((frame.params ?? {}) as Record<string, unknown>) as { id?: string; reason?: string };
+      let approvalId = params.id;
+      if (!approvalId) {
+        const pending = connections.getPendingApprovals();
+        if (pending.length > 0) approvalId = pending[0].id;
+      }
+      if (!approvalId) {
+        res(true, { status: "no-pending" });
+        return;
+      }
+      const result = { decision: "denied" as const, reason: params.reason };
+      const ok = connections.resolveApproval(approvalId, result);
+      res(true, { status: ok ? "rejected" : "no-pending" });
       return;
     }
 
     case "chat.abort": {
       const aborted = connections.abortRunning();
       res(true, { status: aborted ? "aborted" : "idle" });
+      return;
+    }
+
+    case "system.info": {
+      const uptimeMs = Math.floor(process.uptime() * 1000);
+      const memory = process.memoryUsage();
+      res(true, {
+        status: "ok",
+        server: "agent-bridge",
+        uptimeMs,
+        startedAt: Date.now() - uptimeMs,
+        agents: registry.list().length,
+        memory: {
+          heapUsed: memory.heapUsed,
+          heapTotal: memory.heapTotal,
+          rss: memory.rss,
+        },
+        connections: connections.count,
+        relayOnline: connections.relayOnline,
+        platform: process.platform,
+        nodeVersion: process.version,
+      });
+      return;
+    }
+
+    case "system.restart": {
+      res(true, { status: "restarting" });
+      setTimeout(() => {
+        process.exit(42);
+      }, 500);
       return;
     }
 
@@ -396,12 +450,16 @@ async function handleChatSendViaRelay(
       message: params.message,
       resumeSessionId,
       cwd,
-      requestApproval: (action, description) => {
-        return new Promise<boolean>((resolve) => {
-          console.log(`[relay-up] 审批请求: ${action} — ${description}`);
-          relayClient.pushEvent("agent", { type: "approval_required", action, description });
-          connections.setPendingApproval(resolve);
+      requestApproval: (req) => {
+        console.log(`[relay-up] 审批请求: ${req.toolName} — ${req.description}`);
+        relayClient.pushEvent("agent", {
+          type: "approval_required",
+          id: req.id,
+          toolName: req.toolName,
+          input: req.input,
+          description: req.description,
         });
+        return connections.addPendingApproval(req.id, req.toolName, req.description);
       },
     });
 
@@ -436,7 +494,6 @@ async function handleChatSendViaRelay(
   } finally {
     sessionWatcher.resume(adapterId);
     connections.setRunningController(null);
-    connections.setPendingApproval(null);
   }
 }
 

@@ -21,6 +21,7 @@ import type {
 import { PROTOCOL_VERSION, SERVER_NAME } from "../protocol/frames.js";
 import type { AuthManager } from "./auth.js";
 import type { SessionWatcher } from "./session-watcher.js";
+import type { ToolApprovalRequest, ToolApprovalResult } from "../providers/types.js";
 
 // 每个连接的会话状态
 interface SessionState {
@@ -176,14 +177,72 @@ async function handleReq(
     }
 
     case "chat.approve": {
-      const ok = connections.resolveApproval(true);
+      const params = (frame.params ?? {}) as { id?: string; forSession?: boolean };
+      // 兼容旧版：不传 id 时取第一个待审批
+      let approvalId = params.id;
+      if (!approvalId) {
+        const pending = connections.getPendingApprovals();
+        if (pending.length > 0) approvalId = pending[0].id;
+      }
+      if (!approvalId) {
+        send(ws, makeResOk(frame.id, { status: "no-pending" }));
+        break;
+      }
+      const result: ToolApprovalResult = {
+        decision: params.forSession ? "approved_for_session" : "approved",
+      };
+      const ok = connections.resolveApproval(approvalId, result);
       send(ws, makeResOk(frame.id, { status: ok ? "approved" : "no-pending" }));
       break;
     }
 
     case "chat.reject": {
-      const ok = connections.resolveApproval(false);
+      const params = (frame.params ?? {}) as { id?: string; reason?: string };
+      let approvalId = params.id;
+      if (!approvalId) {
+        const pending = connections.getPendingApprovals();
+        if (pending.length > 0) approvalId = pending[0].id;
+      }
+      if (!approvalId) {
+        send(ws, makeResOk(frame.id, { status: "no-pending" }));
+        break;
+      }
+      const result: ToolApprovalResult = {
+        decision: "denied",
+        reason: params.reason,
+      };
+      const ok = connections.resolveApproval(approvalId, result);
       send(ws, makeResOk(frame.id, { status: ok ? "rejected" : "no-pending" }));
+      break;
+    }
+
+    case "system.info": {
+      const uptimeMs = Math.floor(process.uptime() * 1000);
+      const memory = process.memoryUsage();
+      send(ws, makeResOk(frame.id, {
+        status: "ok",
+        server: "agent-bridge",
+        uptimeMs,
+        startedAt: Date.now() - uptimeMs,
+        agents: registry.list().length,
+        memory: {
+          heapUsed: memory.heapUsed,
+          heapTotal: memory.heapTotal,
+          rss: memory.rss,
+        },
+        connections: connections.count,
+        relayOnline: connections.relayOnline,
+        platform: process.platform,
+        nodeVersion: process.version,
+      }));
+      break;
+    }
+
+    case "system.restart": {
+      send(ws, makeResOk(frame.id, { status: "restarting" }));
+      setTimeout(() => {
+        process.exit(42);
+      }, 500);
       break;
     }
 
@@ -254,11 +313,15 @@ async function handleChatSend(
       message: params.message,
       resumeSessionId,
       cwd,
-      requestApproval: (action, description) => {
-        return new Promise<boolean>((resolve) => {
-          connections.deliver(ws, makeEvent(state, "agent", { type: "approval_required", action, description }));
-          connections.setPendingApproval(resolve);
-        });
+      requestApproval: (req: ToolApprovalRequest) => {
+        connections.deliver(ws, makeEvent(state, "agent", {
+          type: "approval_required",
+          id: req.id,
+          toolName: req.toolName,
+          input: req.input,
+          description: req.description,
+        }));
+        return connections.addPendingApproval(req.id, req.toolName, req.description);
       },
     });
 
@@ -279,7 +342,6 @@ async function handleChatSend(
   } finally {
     sessionWatcher.resume(adapterId);
     connections.setRunningController(null);
-    connections.setPendingApproval(null);
   }
 }
 

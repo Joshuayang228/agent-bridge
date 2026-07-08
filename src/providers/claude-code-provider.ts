@@ -13,7 +13,8 @@
  */
 
 import { spawn } from "node:child_process";
-import type { AgentConfig, AgentInput, AgentProvider, AgentEvent } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { AgentConfig, AgentInput, AgentProvider, AgentEvent, ToolApprovalResult } from "./types.js";
 import type { AgentInfo } from "../protocol/frames.js";
 
 // Claude Code stream-json 的行类型
@@ -57,6 +58,8 @@ export class ClaudeCodeProvider implements AgentProvider {
   // 标记是否已收到 stream_event（启用 --include-partial-messages 后会变成 true）
   // 一旦为 true，assistant 事件的 text delta 就跳过（已被 stream_event 流式推送过）
   private streamEventSeen = false;
+  // 会话级已批准的工具（approved_for_session），同一会话内自动通过
+  private sessionApprovedTools = new Set<string>();
 
   constructor(config: AgentConfig) {
     this.info = {
@@ -72,6 +75,9 @@ export class ClaudeCodeProvider implements AgentProvider {
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
     // 每次调用前重置状态
     this.streamEventSeen = false;
+    // 重置会话级白名单（每个 send 调用是一次新的 turn，但 session 级应该保留）
+    // 注意：这里我们按 provider 实例生命周期保留，因为同一 agent 的同一会话复用同一实例
+    // 如果需要严格按 sessionId 隔离，可以在外部维护一个 map
 
     const args = [
       "-p", input.message,
@@ -143,17 +149,41 @@ export class ClaudeCodeProvider implements AgentProvider {
 
           // 危险工具审批拦截
           for (const evt of events) {
-            if (evt.type === "tool_start" && this.isDangerous(evt.tool)) {
+            if (evt.type === "tool_start" && evt.toolName && this.isDangerous(evt.toolName)) {
+              // 会话级白名单：已批准过的工具自动通过
+              if (this.sessionApprovedTools.has(evt.toolName)) {
+                yield evt;
+                continue;
+              }
+
               yield evt; // 先推送 tool_start 事件让手机端看到
 
               // 触发手机审批
-              const approved = input.requestApproval
-                ? await input.requestApproval(evt.tool, `危险工具调用：${evt.tool}`)
-                : true;
+              let result: ToolApprovalResult;
+              if (input.requestApproval && evt.toolName && evt.input) {
+                result = await input.requestApproval({
+                  id: evt.toolId ?? randomUUID(),
+                  toolName: evt.toolName,
+                  input: evt.input,
+                  description: evt.tool,
+                });
+              } else {
+                result = { decision: "approved" };
+              }
 
-              if (!approved) {
+              if (result.decision === "approved" || result.decision === "approved_for_session") {
+                if (result.decision === "approved_for_session") {
+                  this.sessionApprovedTools.add(evt.toolName);
+                }
+                // 批准了，继续执行（注意：CC 的 -p 模式已经执行完了，这里只是不杀进程）
+                // 对于 pre-execution 审批，这里才是真正的放行点
+              } else if (result.decision === "denied") {
                 child.kill();
-                yield { type: "error", message: `用户拒绝了工具调用：${evt.tool}` };
+                yield { type: "error", message: result.reason || `用户拒绝了工具调用：${evt.toolName}` };
+                return;
+              } else if (result.decision === "aborted") {
+                child.kill();
+                yield { type: "error", message: "操作已中止" };
                 return;
               }
             } else {
@@ -206,9 +236,8 @@ export class ClaudeCodeProvider implements AgentProvider {
     }
   }
 
-  /** 检查工具是否危险（tool 字段格式 "Bash: rm -rf xxx"） */
-  private isDangerous(tool: string): boolean {
-    const toolName = tool.split(":")[0].trim();
+  /** 检查工具是否危险 */
+  private isDangerous(toolName: string): boolean {
     return this.dangerousTools.has(toolName);
   }
 
@@ -245,7 +274,13 @@ export class ClaudeCodeProvider implements AgentProvider {
             }
           } else if (c.type === "tool_use") {
             const desc = formatToolDesc(c.name, c.input);
-            events.push({ type: "tool_start", tool: `${c.name}: ${desc}` });
+            events.push({
+              type: "tool_start",
+              tool: `${c.name}: ${desc}`,
+              toolId: c.id,
+              toolName: c.name,
+              input: c.input,
+            });
           }
         }
         break;
