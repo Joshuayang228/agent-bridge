@@ -1,8 +1,9 @@
 # AGENTS.md — agent-bridge 项目权威规则
 
-> 本文件是本项目面向所有开发 Agent（Claude Code 主力，偶尔 Cursor / Codex）的**唯一权威规则源**，且**自包含**——本项目作为独立仓库打开时，上层 vault 的 CLAUDE.md 不会加载，故全套规则须在此齐备。
-> 目录名仍叫 `trae大赛/`（历史命名），产品名 **agent-bridge**（GitHub: `Joshuayang228/agent-bridge`）。
-> 高频、强约束、必须默认执行的规则写在正文常驻；低频、场景化的详细规则放 `docs/agent-skills/`，按索引表引导按需读取。
+> `AGENTS.md` 是本项目面向所有开发 Agent 的 canonical source，且必须自包含；独立打开仓库时不能依赖上层 vault 规则。
+> Claude Code 通过同目录 `CLAUDE.md` 的 `@AGENTS.md` 导入；Codex 等工具直接读取。
+> 目录名仍叫 `trae大赛/`（历史命名），产品名为 **agent-bridge**（GitHub: `Joshuayang228/agent-bridge`）。
+> 高频强约束写在正文；低频场景规则放 `docs/agent-skills/`。
 
 ## 项目定位
 
@@ -183,7 +184,7 @@
 
 ```
 trae大赛/
-├── CLAUDE.md              ← 本文件（自包含权威规则）
+├── AGENTS.md              ← 本文件（自包含权威规则）
 ├── _reference/            ← 参考项目（openclaw、paseo 等）
 └── docs/
     ├── progress.md        ← 进展追踪
