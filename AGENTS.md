@@ -1,6 +1,12 @@
 # AGENTS.md — agent-bridge 项目权威规则
 
-> `AGENTS.md` 是本项目面向所有开发 Agent 的 canonical source，且必须自包含；独立打开仓库时不能依赖上层 vault 规则。
+<!-- RULE_HIERARCHY:START -->
+> 规则层级：**L4 · 独立项目规则**
+> 规则链（父 → 子）：`L1 <Vault>/AGENTS.md` → `L2 <Vault>/积核/项目/AGENTS.md` → `L3 <Vault>/积核/项目/个人项目/AGENTS.md` → `L4 <Vault>/积核/项目/个人项目/trae大赛/AGENTS.md`
+> 加载约定：仅适用于 `<Vault>`（`瓶盖的AI碎碎念`）内部；始终按父 → 子读取。若 Agent 从子目录或独立 Git repo root 启动且未自动加载上层规则，必须主动补读；冲突时近层优先，安全红线不可覆盖。
+<!-- RULE_HIERARCHY:END -->
+
+> `AGENTS.md` 是本项目的 L4 canonical source；在「瓶盖的AI碎碎念」Vault 内使用时，必须先叠加 L1～L3 父级规则。
 > Claude Code 通过同目录 `CLAUDE.md` 的 `@AGENTS.md` 导入；Codex 等工具直接读取。
 > 目录名仍叫 `trae大赛/`（历史命名），产品名为 **agent-bridge**（GitHub: `Joshuayang228/agent-bridge`）。
 > 高频强约束写在正文；低频场景规则放 `docs/agent-skills/`。
@@ -184,7 +190,7 @@
 
 ```
 trae大赛/
-├── AGENTS.md              ← 本文件（自包含权威规则）
+├── AGENTS.md              ← 本文件（L4 项目权威规则）
 ├── _reference/            ← 参考项目（openclaw、paseo 等）
 └── docs/
     ├── progress.md        ← 进展追踪
